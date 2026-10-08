@@ -2,14 +2,32 @@ import React from 'react';
 import { Flame, Trophy, Target, Star, Zap, Award, Calendar, CheckCircle } from 'lucide-react';
 
 export default function ProgressView({ dashboardData }) {
-  const { streak, achievements, user } = dashboardData;
+  const { streak, achievements, user, recentTests } = dashboardData;
 
-  // Generate 35 days heatmap cells
+  // Generate 35 days heatmap cells based on actual data
   const days = Array.from({ length: 35 }, (_, i) => {
-    const active = i % 3 !== 0; // simulated active days
-    const level = active ? (i % 4) + 1 : 0;
-    return { day: i + 1, active, level };
+    const d = new Date();
+    d.setDate(d.getDate() - (34 - i));
+    const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+    
+    // Count how many tests on this day
+    const testsOnDay = (recentTests || []).filter(t => t.date === dateStr).length;
+    
+    const active = testsOnDay > 0;
+    let level = 0;
+    if (testsOnDay > 5) level = 4;
+    else if (testsOnDay > 3) level = 3;
+    else if (testsOnDay > 1) level = 2;
+    else if (testsOnDay === 1) level = 1;
+
+    // Optional: if it's mock data and missing tests, we can fall back to the old static visual if we want, 
+    // but the user wants it dynamic, so it will reflect their true practice data.
+    return { day: d.getDate(), active, level, dateStr, testsOnDay };
   });
+
+  const practiceDaysCount = days.filter(d => d.active).length;
+  const practiceRate = Math.round((practiceDaysCount / 35) * 100);
+  const masteryLevel = Math.floor((user?.tests_completed || 0) / 10) + 1;
 
   return (
     <div className="page-container">
@@ -50,8 +68,8 @@ export default function ProgressView({ dashboardData }) {
             <span className="stat-label">Practice Days</span>
           </div>
           <div className="stat-card-bottom">
-            <span className="stat-value">28 / 30</span>
-            <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 700 }}>93% rate</span>
+            <span className="stat-value">{practiceDaysCount} / 35</span>
+            <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 700 }}>{practiceRate}% rate</span>
           </div>
         </div>
 
@@ -73,8 +91,8 @@ export default function ProgressView({ dashboardData }) {
             <span className="stat-label">Mastery Level</span>
           </div>
           <div className="stat-card-bottom">
-            <span className="stat-value">Level 14</span>
-            <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: 700 }}>Pro</span>
+            <span className="stat-value">Level {masteryLevel}</span>
+            <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: 700 }}>{masteryLevel >= 10 ? 'Pro' : 'Novice'}</span>
           </div>
         </div>
       </div>
@@ -104,7 +122,7 @@ export default function ProgressView({ dashboardData }) {
             return (
               <div
                 key={idx}
-                title={`Day ${item.day}: Level ${item.level} practice`}
+                title={`${item.dateStr}: ${item.testsOnDay} tests (Level ${item.level})`}
                 style={{
                   height: '36px',
                   borderRadius: '8px',

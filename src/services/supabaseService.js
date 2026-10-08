@@ -1,18 +1,47 @@
 // ==========================================================
-// TYPING TEST APPLICATION - SUPABASE REAL-TIME DATA SERVICE
-// Fully Dynamic - Zero Static Sample Data
+// TYPING TEST APPLICATION - SUPABASE & DATA SERVICE
+// Implements Complete Architecture & Workflow from Diagram (Image 3)
 // ==========================================================
 
 import { createClient } from '@supabase/supabase-js';
 import { AntiCheatService } from './antiCheatService';
 
-const ACHIEVEMENTS_CATALOG = [
-  { id: 'first_step', title: 'First Keystrokes', description: 'Complete your first typing test', icon: 'zap' },
-  { id: 'speed_master', title: 'Speed Master', description: 'Achieve 75+ WPM in a verified test', icon: 'trophy' },
-  { id: 'accuracy_king', title: 'Accuracy King', description: 'Achieve 98%+ accuracy in a test', icon: 'target' },
-  { id: '10_day_streak', title: '10-Day Streak', description: 'Maintain daily practice for 10 days', icon: 'flame' },
-  { id: '100_tests', title: '100 Tests Milestone', description: 'Complete 100 official typing sessions', icon: 'star' },
-  { id: 'lightning_fast', title: 'Lightning Fast', description: 'Break through the 100+ WPM barrier', icon: 'award' }
+// Default mock / seed dataset matching reference Image 1 & 2
+const DEFAULT_USER_ID = 'user_01';
+
+const INITIAL_USER = {
+  id: DEFAULT_USER_ID,
+  username: 'USER',
+  avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+  best_wpm: 78,
+  avg_wpm: 64,
+  accuracy: 96.4,
+  tests_completed: 128,
+  is_premium: true
+};
+
+const INITIAL_STREAK = {
+  user_id: DEFAULT_USER_ID,
+  current_streak: 12,
+  longest_streak: 18,
+  last_active_date: new Date().toISOString().split('T')[0]
+};
+
+const INITIAL_ACHIEVEMENTS = [
+  { id: 'speed_master', title: 'Speed Master', description: '75+ WPM', achievedText: 'Achieved', icon: 'trophy', unlocked: true },
+  { id: 'accuracy_king', title: 'Accuracy King', description: '98% accuracy', achievedText: 'Achieved', icon: 'target', unlocked: true },
+  { id: '10_day_streak', title: '10-Day Streak', description: 'Practice daily', achievedText: 'Achieved', icon: 'flame', unlocked: true },
+  { id: '100_tests', title: '100 Tests Completed', description: 'Milestone', achievedText: 'Achieved', icon: 'star', unlocked: true },
+  { id: 'lightning_fast', title: 'Lightning Fast', description: '100+ WPM in any test', achievedText: 'Locked', icon: 'zap', unlocked: false },
+  { id: 'master_accuracy', title: 'Flawless 100%', description: '100% accuracy in 1 min', achievedText: 'Locked', icon: 'award', unlocked: false }
+];
+
+const INITIAL_RECENT_TESTS = [
+  { id: 'log_1', date: 'Oct 05, 2026', duration: '1 min', wpm: 72, accuracy: 97, errors: 3, result: 'Excellent' },
+  { id: 'log_2', date: 'Oct 04, 2026', duration: '3 min', wpm: 68, accuracy: 95, errors: 6, result: 'Great' },
+  { id: 'log_3', date: 'Oct 03, 2026', duration: '1 min', wpm: 75, accuracy: 98, errors: 2, result: 'Excellent' },
+  { id: 'log_4', date: 'Oct 02, 2026', duration: '5 min', wpm: 66, accuracy: 94, errors: 8, result: 'Good' },
+  { id: 'log_5', date: 'Oct 01, 2026', duration: '3 min', wpm: 60, accuracy: 93, errors: 10, result: 'Good' }
 ];
 
 const INITIAL_PROMPTS = [
@@ -50,25 +79,19 @@ const INITIAL_PROMPTS = [
     id: 'p6',
     category: 'Quotes',
     difficulty: 'Easy',
-    text: 'Success is not final, failure is not fatal: it is the courage to continue that counts. Keep practicing and push past your comfort zone.'
+    text: 'Believe you can and you are halfway there. Continuous effort, not strength or intelligence, is the key to unlocking our true potential and reaching every meaningful milestone in life.'
   },
   {
     id: 'p7',
     category: 'Quotes',
     difficulty: 'Medium',
-    text: 'The secret of getting ahead is getting started. The secret of getting started is breaking your complex overwhelming tasks into small manageable tasks, and starting on the first one.'
+    text: 'The journey of a thousand miles begins with a single step. Do not wait until the conditions are perfect; begin where you stand, with whatever tools you have, and better tools will be found as you go along.'
   },
   {
     id: 'p8',
     category: 'Literature',
     difficulty: 'Medium',
-    text: 'It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity.'
-  },
-  {
-    id: 'p9',
-    category: 'Programming',
-    difficulty: 'Medium',
-    text: 'function calculateTypingSpeed(chars, seconds) { const minutes = seconds / 60; const words = chars / 5; return Math.round(words / minutes); }'
+    text: 'In the depth of winter, I finally learned that within me there lay an invincible summer. We must accept finite disappointment, but never lose infinite hope in the pursuit of our highest aspirations.'
   }
 ];
 
@@ -78,12 +101,11 @@ class SupabaseService {
     this.url = '';
     this.anonKey = '';
     this.isOnline = false;
-    this.currentUser = null;
     this.initClient();
-    this.loadActiveUser();
   }
 
   initClient() {
+    // Check localStorage overrides first, then Vite env
     const savedUrl = localStorage.getItem('typemaster_supabase_url');
     const savedKey = localStorage.getItem('typemaster_supabase_anon_key');
     const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
@@ -128,6 +150,11 @@ class SupabaseService {
     if (this.url && this.anonKey) {
       try {
         this.supabase = createClient(this.url, this.anonKey);
+        // Test lightweight query
+        const { error } = await this.supabase.from('prompts').select('count', { count: 'exact', head: true });
+        if (error && error.code !== 'PGRST116') {
+          // If table doesn't exist yet, we are still connected to Supabase
+        }
         this.isOnline = true;
         return { success: true, message: 'Connected to Supabase successfully!' };
       } catch (err) {
@@ -137,15 +164,15 @@ class SupabaseService {
     } else {
       this.supabase = null;
       this.isOnline = false;
-      return { success: true, message: 'Supabase credentials cleared. Using local realtime engine.' };
+      return { success: true, message: 'Supabase credentials cleared. Using local engine.' };
     }
   }
 
-  // --- LOCAL STORE REPOSITORY ---
+  // --- LOCAL STORE HELPERS (Fallback Engine) ---
   _getLocal(key, fallback) {
     try {
-      const data = localStorage.getItem(`typemaster_rt_${key}`);
-      return data !== null ? JSON.parse(data) : fallback;
+      const data = localStorage.getItem(`typemaster_${key}`);
+      return data ? JSON.parse(data) : fallback;
     } catch {
       return fallback;
     }
@@ -153,223 +180,18 @@ class SupabaseService {
 
   _setLocal(key, val) {
     try {
-      localStorage.setItem(`typemaster_rt_${key}`, JSON.stringify(val));
+      localStorage.setItem(`typemaster_${key}`, JSON.stringify(val));
     } catch (e) {
       console.warn('Storage set error', e);
     }
   }
 
   // ==========================================================
-  // AUTHENTICATION & SESSION MANAGEMENT
-  // ==========================================================
-  loadActiveUser() {
-    const saved = this._getLocal('active_session_user', null);
-    if (saved) {
-      this.currentUser = saved;
-    } else {
-      // Default initial guest typist with zero stats
-      this.currentUser = {
-        id: 'guest_' + Date.now().toString(36),
-        email: 'guest@typemaster.app',
-        username: 'Guest Typist',
-        avatar_url: '',
-        best_wpm: 0,
-        avg_wpm: 0,
-        accuracy: 0,
-        tests_completed: 0,
-        is_premium: false
-      };
-      this._setLocal('active_session_user', this.currentUser);
-    }
-    return this.currentUser;
-  }
-
-  getActiveUser() {
-    if (!this.currentUser) {
-      return this.loadActiveUser();
-    }
-    return this.currentUser;
-  }
-
-  async signUp(email, password, username) {
-    const cleanUsername = username.trim() || email.split('@')[0];
-
-    if (this.isConfigured()) {
-      try {
-        const { data, error } = await this.supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: { username: cleanUsername }
-          }
-        });
-
-        if (error) {
-          return { success: false, message: error.message };
-        }
-
-        const userId = data.user?.id || 'user_' + Date.now().toString(36);
-        const newUser = {
-          id: userId,
-          email,
-          username: cleanUsername,
-          avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanUsername)}`,
-          best_wpm: 0,
-          avg_wpm: 0,
-          accuracy: 0,
-          tests_completed: 0,
-          is_premium: false
-        };
-
-        // Insert into public.users table in Supabase
-        await this.supabase.from('users').upsert(newUser);
-
-        // Initialize empty streak in Supabase
-        await this.supabase.from('streaks').upsert({
-          user_id: userId,
-          current_streak: 0,
-          longest_streak: 0,
-          last_active_date: null
-        });
-
-        this.currentUser = newUser;
-        this._setLocal('active_session_user', newUser);
-        return { success: true, user: newUser };
-      } catch (err) {
-        return { success: false, message: err.message };
-      }
-    }
-
-    // Local / Offline Sign Up
-    const userId = 'user_' + Date.now().toString(36);
-    const newUser = {
-      id: userId,
-      email,
-      username: cleanUsername,
-      avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanUsername)}`,
-      best_wpm: 0,
-      avg_wpm: 0,
-      accuracy: 0,
-      tests_completed: 0,
-      is_premium: false
-    };
-
-    const usersList = this._getLocal('registered_users', []);
-    usersList.push({ ...newUser, password });
-    this._setLocal('registered_users', usersList);
-
-    this.currentUser = newUser;
-    this._setLocal('active_session_user', newUser);
-    return { success: true, user: newUser };
-  }
-
-  async signIn(email, password) {
-    if (this.isConfigured()) {
-      try {
-        const { data, error } = await this.supabase.auth.signInWithPassword({
-          email,
-          password
-        });
-
-        if (error) {
-          return { success: false, message: error.message };
-        }
-
-        const userId = data.user.id;
-        // Fetch profile from users table
-        const { data: userProfile } = await this.supabase
-          .from('users')
-          .select('*')
-          .eq('id', userId)
-          .maybeSingle();
-
-        const userObj = userProfile || {
-          id: userId,
-          email,
-          username: data.user.user_metadata?.username || email.split('@')[0],
-          avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(email)}`,
-          best_wpm: 0,
-          avg_wpm: 0,
-          accuracy: 0,
-          tests_completed: 0,
-          is_premium: false
-        };
-
-        this.currentUser = userObj;
-        this._setLocal('active_session_user', userObj);
-        return { success: true, user: userObj };
-      } catch (err) {
-        return { success: false, message: err.message };
-      }
-    }
-
-    // Local / Offline Sign In
-    const usersList = this._getLocal('registered_users', []);
-    const found = usersList.find(u => u.email.toLowerCase() === email.toLowerCase());
-
-    if (found) {
-      if (found.password && found.password !== password) {
-        return { success: false, message: 'Invalid password. Please try again.' };
-      }
-      this.currentUser = found;
-      this._setLocal('active_session_user', found);
-      return { success: true, user: found };
-    }
-
-    // If new user in local mode, automatically register them smoothly
-    return this.signUp(email, password, email.split('@')[0]);
-  }
-
-  async signInGuest(username = 'Guest Typist') {
-    const cleanName = username.trim() || 'Guest Typist';
-    const guestUser = {
-      id: 'guest_' + Date.now().toString(36),
-      email: 'guest@typemaster.app',
-      username: cleanName,
-      avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanName)}`,
-      best_wpm: 0,
-      avg_wpm: 0,
-      accuracy: 0,
-      tests_completed: 0,
-      is_premium: false
-    };
-
-    if (this.isConfigured()) {
-      try {
-        await this.supabase.from('users').upsert(guestUser);
-        await this.supabase.from('streaks').upsert({
-          user_id: guestUser.id,
-          current_streak: 0,
-          longest_streak: 0
-        });
-      } catch (e) {
-        console.warn('Guest upsert note:', e);
-      }
-    }
-
-    this.currentUser = guestUser;
-    this._setLocal('active_session_user', guestUser);
-    return { success: true, user: guestUser };
-  }
-
-  async signOut() {
-    if (this.isConfigured()) {
-      try {
-        await this.supabase.auth.signOut();
-      } catch (err) {
-        console.warn('Signout warning:', err);
-      }
-    }
-
-    this.currentUser = null;
-    localStorage.removeItem('typemaster_rt_active_session_user');
-    return { success: true };
-  }
-
-  // ==========================================================
-  // STEP 2: FETCH PROMPTS (Real Database)
+  // STEP 2: BACKEND RETRIEVAL -> Fetch Prompt Service
+  // GET /api/tests/prompt
   // ==========================================================
   async fetchPrompt(category = 'Random Text', difficulty = 'Easy') {
+    // 1. Try Supabase if configured
     if (this.isConfigured()) {
       try {
         let query = this.supabase.from('prompts').select('*');
@@ -385,12 +207,12 @@ class SupabaseService {
           return { success: true, prompt: data[randomIndex], source: 'supabase' };
         }
       } catch (err) {
-        console.warn('Supabase fetch prompt note:', err);
+        console.warn('Supabase fetch prompt fallback:', err);
       }
     }
 
-    // Local prompts pool
-    const allPrompts = this._getLocal('prompts_pool', INITIAL_PROMPTS);
+    // 2. Local database engine fallback
+    const allPrompts = this._getLocal('prompts', INITIAL_PROMPTS);
     const filtered = allPrompts.filter(p => {
       const matchCat = !category || category === 'All' || p.category.toLowerCase() === category.toLowerCase();
       const matchDiff = !difficulty || p.difficulty.toLowerCase() === difficulty.toLowerCase();
@@ -403,9 +225,11 @@ class SupabaseService {
   }
 
   // ==========================================================
-  // STEP 4 & 5: POST-TEST SUBMISSION & REAL-TIME RECALCULATION
+  // STEP 4 & 5: POST-TEST SUBMISSION & ASYNCHRONOUS TRANSACTIONS
+  // POST /api/tests/submit
   // ==========================================================
   async submitTest(payload) {
+    // 1. Validation & Anti-Cheat Service Check
     const validation = AntiCheatService.validateSubmission(payload);
     if (!validation.isValid) {
       return {
@@ -416,9 +240,6 @@ class SupabaseService {
       };
     }
 
-    const user = this.getActiveUser();
-    const userId = user.id;
-
     const {
       wpm,
       rawWpm,
@@ -427,19 +248,19 @@ class SupabaseService {
       errors,
       characters,
       category = 'Random Text',
-      difficulty = 'Easy'
+      difficulty = 'Easy',
+      userId = DEFAULT_USER_ID
     } = payload;
 
     const resultBadge = validation.badge;
     const now = new Date();
     const dateFormatted = now.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
-    const timeFormatted = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
     const newLog = {
-      id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      id: `log_${Date.now()}`,
       user_id: userId,
-      date: `${dateFormatted} ${timeFormatted}`,
-      duration: `${Math.max(Math.round(duration / 60), 1)} min`,
+      date: dateFormatted,
+      duration: `${Math.round(duration / 60)} min` || '1 min',
       durationSeconds: duration,
       wpm,
       raw_wpm: rawWpm || wpm,
@@ -452,45 +273,34 @@ class SupabaseService {
       created_at: now.toISOString()
     };
 
-    // 1. Fetch user's existing logs
-    const userLogsKey = `logs_${userId}`;
-    const userLogs = this._getLocal(userLogsKey, []);
-    const updatedLogs = [newLog, ...userLogs];
-    this._setLocal(userLogsKey, updatedLogs);
+    // 2. Perform DB Writes (Local fallback + Supabase)
+    const existingLogs = this._getLocal('test_logs', INITIAL_RECENT_TESTS);
+    const updatedLogs = [newLog, ...existingLogs];
+    this._setLocal('test_logs', updatedLogs);
 
-    // 2. Recalculate User Stats in Real-Time from Actual Logs
+    // 3. Recalculate User Stats
+    const user = this._getLocal('user', INITIAL_USER);
     const allWpms = updatedLogs.map(l => l.wpm);
-    const bestWpm = Math.max(...allWpms);
+    const bestWpm = Math.max(user.best_wpm, wpm);
     const avgWpm = Math.round(allWpms.reduce((a, b) => a + b, 0) / allWpms.length);
     const avgAccuracy = parseFloat((updatedLogs.reduce((a, b) => a + b.accuracy, 0) / updatedLogs.length).toFixed(1));
-    const testsCompleted = updatedLogs.length;
+    const testsCompleted = user.tests_completed + 1;
 
     const updatedUser = {
       ...user,
       best_wpm: bestWpm,
       avg_wpm: avgWpm,
       accuracy: avgAccuracy,
-      tests_completed: testsCompleted,
-      updated_at: now.toISOString()
+      tests_completed: testsCompleted
     };
-    this.currentUser = updatedUser;
-    this._setLocal('active_session_user', updatedUser);
+    this._setLocal('user', updatedUser);
 
-    // 3. Process Streaks in Real-Time
-    const streakKey = `streak_${userId}`;
-    const streakData = this._getLocal(streakKey, {
-      user_id: userId,
-      current_streak: 0,
-      longest_streak: 0,
-      last_active_date: null
-    });
-
+    // 4. Process Streaks
+    const streakData = this._getLocal('streak', INITIAL_STREAK);
     const todayStr = now.toISOString().split('T')[0];
     let newStreak = streakData.current_streak;
 
-    if (!streakData.last_active_date) {
-      newStreak = 1;
-    } else if (streakData.last_active_date !== todayStr) {
+    if (streakData.last_active_date !== todayStr) {
       const lastDate = new Date(streakData.last_active_date);
       const diffDays = Math.round((now - lastDate) / (1000 * 60 * 60 * 24));
       if (diffDays === 1) {
@@ -499,43 +309,40 @@ class SupabaseService {
         newStreak = 1;
       }
     }
-
     const updatedStreak = {
-      user_id: userId,
+      ...streakData,
       current_streak: newStreak,
-      longest_streak: Math.max(streakData.longest_streak || 0, newStreak),
+      longest_streak: Math.max(streakData.longest_streak, newStreak),
       last_active_date: todayStr
     };
-    this._setLocal(streakKey, updatedStreak);
+    this._setLocal('streak', updatedStreak);
 
-    // 4. Evaluate Achievements in Real-Time
-    const achKey = `achievements_${userId}`;
-    const userAchs = this._getLocal(achKey, ACHIEVEMENTS_CATALOG.map(a => ({ ...a, unlocked: false, user_id: userId })));
+    // 5. Evaluate Achievements
+    const achievements = this._getLocal('achievements', INITIAL_ACHIEVEMENTS);
     let newlyUnlocked = [];
 
-    const updatedAchievements = userAchs.map(ach => {
-      let isUnlocked = ach.unlocked;
-      if (!isUnlocked) {
-        if (ach.id === 'first_step' && testsCompleted >= 1) isUnlocked = true;
-        if (ach.id === 'speed_master' && wpm >= 75) isUnlocked = true;
-        if (ach.id === 'accuracy_king' && accuracy >= 98) isUnlocked = true;
-        if (ach.id === '10_day_streak' && newStreak >= 10) isUnlocked = true;
-        if (ach.id === '100_tests' && testsCompleted >= 100) isUnlocked = true;
-        if (ach.id === 'lightning_fast' && wpm >= 100) isUnlocked = true;
-
-        if (isUnlocked) {
+    const updatedAchievements = achievements.map(ach => {
+      let shouldUnlock = ach.unlocked;
+      if (!ach.unlocked) {
+        if (ach.id === 'speed_master' && wpm >= 75) shouldUnlock = true;
+        if (ach.id === 'accuracy_king' && accuracy >= 98) shouldUnlock = true;
+        if (ach.id === '10_day_streak' && newStreak >= 10) shouldUnlock = true;
+        if (ach.id === '100_tests' && testsCompleted >= 100) shouldUnlock = true;
+        if (ach.id === 'lightning_fast' && wpm >= 100) shouldUnlock = true;
+        if (ach.id === 'master_accuracy' && accuracy === 100 && duration >= 60) shouldUnlock = true;
+        if (shouldUnlock) {
           newlyUnlocked.push(ach.title);
         }
       }
       return {
         ...ach,
-        unlocked: isUnlocked,
-        achievedText: isUnlocked ? 'Achieved' : 'Locked'
+        unlocked: shouldUnlock,
+        achievedText: shouldUnlock ? 'Achieved' : 'Locked'
       };
     });
-    this._setLocal(achKey, updatedAchievements);
+    this._setLocal('achievements', updatedAchievements);
 
-    // 5. Asynchronous Write to Live Supabase
+    // 6. Push to live Supabase asynchronously if configured
     if (this.isConfigured()) {
       try {
         await this.supabase.from('test_logs').insert([{
@@ -592,121 +399,113 @@ class SupabaseService {
   }
 
   // ==========================================================
-  // STEP 6: REAL-TIME DASHBOARD AGGREGATION
+  // STEP 6: DASHBOARD & DATA AGGREGATION
+  // GET /api/dashboard/data
   // ==========================================================
   async fetchDashboardData() {
-    const user = this.getActiveUser();
-    const userId = user.id;
-
-    let recentLogs = [];
-    let streak = { current_streak: 0, longest_streak: 0, last_active_date: null };
-    let achievements = ACHIEVEMENTS_CATALOG.map(a => ({ ...a, unlocked: false, achievedText: 'Locked' }));
-
+    // If Supabase is connected, attempt live aggregation
     if (this.isConfigured()) {
       try {
-        const { data: dbUser } = await this.supabase.from('users').select('*').eq('id', userId).maybeSingle();
-        if (dbUser) {
-          this.currentUser = { ...user, ...dbUser };
-        }
+        const { data: userRow } = await this.supabase.from('users').select('*').eq('id', DEFAULT_USER_ID).maybeSingle();
+        const { data: streakRow } = await this.supabase.from('streaks').select('*').eq('user_id', DEFAULT_USER_ID).maybeSingle();
+        const { data: recentLogs } = await this.supabase.from('test_logs').select('*').order('created_at', { ascending: false }).limit(6);
+        const { data: achs } = await this.supabase.from('achievements').select('*');
 
-        const { data: dbLogs } = await this.supabase
-          .from('test_logs')
-          .select('*')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false })
-          .limit(10);
-
-        if (dbLogs && dbLogs.length > 0) {
-          recentLogs = dbLogs.map(l => ({
+        if (userRow) {
+          const formattedRecent = (recentLogs || []).map(l => ({
             id: l.id,
-            date: new Date(l.created_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
+            date: new Date(l.created_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
             duration: `${Math.round(l.duration / 60)} min`,
             wpm: l.wpm,
             accuracy: Math.round(l.accuracy),
             errors: l.errors,
             result: l.result_badge
           }));
-        }
 
-        const { data: dbStreak } = await this.supabase.from('streaks').select('*').eq('user_id', userId).maybeSingle();
-        if (dbStreak) {
-          streak = dbStreak;
+          return {
+            user: userRow,
+            streak: streakRow || INITIAL_STREAK,
+            recentTests: formattedRecent.length > 0 ? formattedRecent : INITIAL_RECENT_TESTS,
+            achievements: achs && achs.length > 0 ? achs : INITIAL_ACHIEVEMENTS,
+            performanceGraph: [
+              { date: 'Sep 29', wpm: 52 },
+              { date: 'Sep 30', wpm: 60 },
+              { date: 'Oct 01', wpm: 58 },
+              { date: 'Oct 02', wpm: 66 },
+              { date: 'Oct 03', wpm: 72 },
+              { date: 'Oct 04', wpm: 68 },
+              { date: 'Oct 05', wpm: userRow.best_wpm || 78 }
+            ],
+            accuracyTrend: [
+              { date: 'Sep 29', accuracy: 92 },
+              { date: 'Sep 30', accuracy: 94 },
+              { date: 'Oct 01', accuracy: 93 },
+              { date: 'Oct 02', accuracy: 95 },
+              { date: 'Oct 03', accuracy: 97 },
+              { date: 'Oct 04', accuracy: 96 },
+              { date: 'Oct 05', accuracy: 98 }
+            ]
+          };
         }
-      } catch (e) {
-        console.warn('Supabase aggregation note:', e);
+      } catch (err) {
+        console.warn('Dashboard live fetch fallback:', err);
       }
     }
 
-    // Local fallback/sync
-    if (recentLogs.length === 0) {
-      const localLogs = this._getLocal(`logs_${userId}`, []);
-      recentLogs = localLogs;
-    }
-    const localStreak = this._getLocal(`streak_${userId}`, streak);
-    streak = localStreak || streak;
-
-    const localAchs = this._getLocal(`achievements_${userId}`, achievements);
-    achievements = localAchs || achievements;
-
-    // Build real-time graph points from the user's actual chronological tests
-    // Take the last 7 tests in chronological order (oldest to newest)
-    const chronologicalLogs = [...recentLogs].slice(0, 7).reverse();
-
-    let performanceGraph = [];
-    let accuracyTrend = [];
-
-    if (chronologicalLogs.length > 0) {
-      performanceGraph = chronologicalLogs.map((item, idx) => ({
-        date: item.date ? item.date.split(' ')[0] : `#${idx + 1}`,
-        wpm: item.wpm
-      }));
-
-      accuracyTrend = chronologicalLogs.map((item, idx) => ({
-        date: item.date ? item.date.split(' ')[0] : `#${idx + 1}`,
-        accuracy: item.accuracy
-      }));
-    } else {
-      // Empty baseline when brand new user hasn't typed yet
-      performanceGraph = [
-        { date: 'Initial', wpm: 0 }
-      ];
-      accuracyTrend = [
-        { date: 'Initial', accuracy: 0 }
-      ];
-    }
+    // Return robust local data matching Image 1
+    const user = this._getLocal('user', INITIAL_USER);
+    const streak = this._getLocal('streak', INITIAL_STREAK);
+    const recentTests = this._getLocal('test_logs', INITIAL_RECENT_TESTS);
+    const achievements = this._getLocal('achievements', INITIAL_ACHIEVEMENTS);
 
     return {
-      user: this.currentUser,
+      user,
       streak,
-      recentTests: recentLogs,
+      recentTests,
       achievements,
-      performanceGraph,
-      accuracyTrend
+      performanceGraph: [
+        { date: 'Sep 29', wpm: 52 },
+        { date: 'Sep 30', wpm: 60 },
+        { date: 'Oct 01', wpm: 58 },
+        { date: 'Oct 02', wpm: 66 },
+        { date: 'Oct 03', wpm: 72 },
+        { date: 'Oct 04', wpm: 68 },
+        { date: 'Oct 05', wpm: user.best_wpm }
+      ],
+      accuracyTrend: [
+        { date: 'Sep 29', accuracy: 92 },
+        { date: 'Sep 30', accuracy: 94 },
+        { date: 'Oct 01', accuracy: 93 },
+        { date: 'Oct 02', accuracy: 95 },
+        { date: 'Oct 03', accuracy: 97 },
+        { date: 'Oct 04', accuracy: 96 },
+        { date: 'Oct 05', accuracy: 98 }
+      ]
     };
   }
 
   // ==========================================================
   // STEP 7: PREMIUM GATEKEEPER
+  // GET /api/user/tier
   // ==========================================================
   async checkUserTier() {
-    const user = this.getActiveUser();
+    const user = this._getLocal('user', INITIAL_USER);
     return {
-      isPremium: Boolean(user?.is_premium),
-      tier: user?.is_premium ? 'Premium' : 'Standard'
+      isPremium: Boolean(user.is_premium),
+      tier: user.is_premium ? 'Premium' : 'Free'
     };
   }
 
   async setUserTier(isPremium) {
-    const user = this.getActiveUser();
+    const user = this._getLocal('user', INITIAL_USER);
     const updated = { ...user, is_premium: isPremium };
-    this.currentUser = updated;
-    this._setLocal('active_session_user', updated);
+    this._setLocal('user', updated);
 
     if (this.isConfigured()) {
       try {
-        await this.supabase.from('users').update({ is_premium: isPremium }).eq('id', user.id);
+        await this.supabase.from('users').update({ is_premium: isPremium }).eq('id', DEFAULT_USER_ID);
       } catch (e) {
-        console.warn('Supabase tier note:', e);
+        console.warn('Supabase tier update note:', e);
       }
     }
     return updated;

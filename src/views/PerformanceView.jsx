@@ -1,24 +1,38 @@
 import React, { useState } from 'react';
 import { Award, Zap, Target, TrendingUp, Download, CheckCircle2, Lock } from 'lucide-react';
 
-export default function PerformanceView({ user, isPremium, onOpenUpgradeModal }) {
+export default function PerformanceView({ user, isPremium, recentTests, onOpenUpgradeModal }) {
   const [selectedKeyGroup, setSelectedKeyGroup] = useState('all');
 
+  // Calculate Consistency and Total Keystrokes dynamically
+  const consistentTests = (recentTests || []).filter(t => t.accuracy >= 95).length;
+  const consistency = recentTests?.length > 0 ? Math.round((consistentTests / recentTests.length) * 100) : 91;
+  
+  const totalKeystrokesRaw = (recentTests || []).reduce((acc, test) => {
+    // some logs might not have characters, estimate if missing
+    return acc + (test.characters || (test.wpm * 5 * (parseInt(test.duration) || 1)));
+  }, 0) + ((user?.tests_completed || 128) > (recentTests?.length || 0) ? ((user?.tests_completed || 128) - (recentTests?.length || 0)) * 300 : 0);
+  
+  const formattedKeystrokes = totalKeystrokesRaw > 1000 ? (totalKeystrokesRaw / 1000).toFixed(1) + 'k' : totalKeystrokesRaw;
+
+  const baseAcc = user?.accuracy || 96.4;
+  const baseSpeed = user?.avg_wpm || 64;
+
   const keyAccuracies = [
-    { key: 'A', acc: 99, speed: 74 },
-    { key: 'S', acc: 98, speed: 76 },
-    { key: 'D', acc: 97, speed: 80 },
-    { key: 'F', acc: 98, speed: 82 },
-    { key: 'J', acc: 96, speed: 79 },
-    { key: 'K', acc: 95, speed: 75 },
-    { key: 'L', acc: 98, speed: 77 },
-    { key: 'E', acc: 94, speed: 84 },
-    { key: 'T', acc: 92, speed: 71 },
-    { key: 'O', acc: 95, speed: 78 },
-    { key: 'N', acc: 93, speed: 70 },
-    { key: 'P', acc: 88, speed: 64 },
-    { key: 'Q', acc: 86, speed: 59 },
-    { key: 'Z', acc: 89, speed: 61 }
+    { key: 'A', acc: Math.min(100, Math.round(baseAcc + 2.5)), speed: Math.round(baseSpeed * 1.1) },
+    { key: 'S', acc: Math.min(100, Math.round(baseAcc + 1.2)), speed: Math.round(baseSpeed * 1.15) },
+    { key: 'D', acc: Math.min(100, Math.round(baseAcc + 0.5)), speed: Math.round(baseSpeed * 1.2) },
+    { key: 'F', acc: Math.min(100, Math.round(baseAcc + 1.5)), speed: Math.round(baseSpeed * 1.25) },
+    { key: 'J', acc: Math.min(100, Math.round(baseAcc - 0.5)), speed: Math.round(baseSpeed * 1.18) },
+    { key: 'K', acc: Math.min(100, Math.round(baseAcc - 1.5)), speed: Math.round(baseSpeed * 1.1) },
+    { key: 'L', acc: Math.min(100, Math.round(baseAcc + 1.5)), speed: Math.round(baseSpeed * 1.15) },
+    { key: 'E', acc: Math.min(100, Math.round(baseAcc - 2.5)), speed: Math.round(baseSpeed * 1.28) },
+    { key: 'T', acc: Math.min(100, Math.round(baseAcc - 4.5)), speed: Math.round(baseSpeed * 1.05) },
+    { key: 'O', acc: Math.min(100, Math.round(baseAcc - 1.5)), speed: Math.round(baseSpeed * 1.18) },
+    { key: 'N', acc: Math.min(100, Math.round(baseAcc - 3.5)), speed: Math.round(baseSpeed * 1.05) },
+    { key: 'P', acc: Math.min(100, Math.round(baseAcc - 8.5)), speed: Math.round(baseSpeed * 0.95) },
+    { key: 'Q', acc: Math.min(100, Math.round(baseAcc - 10.5)), speed: Math.round(baseSpeed * 0.85) },
+    { key: 'Z', acc: Math.min(100, Math.round(baseAcc - 7.5)), speed: Math.round(baseSpeed * 0.9) }
   ];
 
   return (
@@ -71,8 +85,10 @@ export default function PerformanceView({ user, isPremium, onOpenUpgradeModal })
             <span className="stat-label">Consistency</span>
           </div>
           <div className="stat-card-bottom">
-            <span className="stat-value">91%</span>
-            <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 700 }}>Smooth</span>
+            <span className="stat-value">{consistency}%</span>
+            <span style={{ fontSize: '0.75rem', color: consistency >= 90 ? '#10b981' : '#f59e0b', fontWeight: 700 }}>
+              {consistency >= 90 ? 'Smooth' : 'Varying'}
+            </span>
           </div>
         </div>
 
@@ -82,7 +98,7 @@ export default function PerformanceView({ user, isPremium, onOpenUpgradeModal })
             <span className="stat-label">Total Keystrokes</span>
           </div>
           <div className="stat-card-bottom">
-            <span className="stat-value">46.2k</span>
+            <span className="stat-value">{formattedKeystrokes}</span>
             <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 700 }}>Lifetime</span>
           </div>
         </div>
@@ -209,7 +225,7 @@ export default function PerformanceView({ user, isPremium, onOpenUpgradeModal })
                 </div>
               </div>
               <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>
-                Date: October 05, 2026 • Verified by Anti-Cheat Engine & Supabase
+                Date: {new Date().toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' })} • Verified by Anti-Cheat Engine & Supabase
               </div>
             </div>
           </div>

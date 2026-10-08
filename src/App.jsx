@@ -159,6 +159,7 @@ export default function App() {
           <PerformanceView
             user={user}
             isPremium={isPremium}
+            recentTests={recentTests}
             onOpenUpgradeModal={() => setIsUpgradeModalOpen(true)}
           />
         )}

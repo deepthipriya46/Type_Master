@@ -77,32 +77,58 @@ export default function VirtualKeyboard({
   targetChar = '',
   lastPressedKey = null,
   isLastError = false,
+  keyFeedback = null,
   soundEnabled = true,
   setSoundEnabled,
   soundType = 'blue',
   setSoundType
 }) {
   const [activeKeys, setActiveKeys] = useState({});
+  const [flashingKeys, setFlashingKeys] = useState({});
   const [showShortcuts, setShowShortcuts] = useState(false);
 
   useEffect(() => {
-    soundSynth.enabled = soundEnabled;
-  }, [soundEnabled]);
+    if (setSoundEnabled && typeof soundSynth !== 'undefined') {
+      soundSynth.setEnabled(soundEnabled);
+    }
+  }, [soundEnabled, setSoundEnabled]);
 
   useEffect(() => {
-    soundSynth.switchType = soundType;
-  }, [soundType]);
+    if (setSoundType && typeof soundSynth !== 'undefined') {
+      soundSynth.setSwitchType(soundType);
+    }
+  }, [soundType, setSoundType]);
+
+  // Flash key feedback (green for correct, red for incorrect)
+  useEffect(() => {
+    if (!keyFeedback || !keyFeedback.key) return;
+    const k = keyFeedback.key.toLowerCase();
+    const flashType = keyFeedback.isCorrect ? 'flash-correct' : 'flash-incorrect';
+    setFlashingKeys(prev => ({ ...prev, [k]: flashType }));
+
+    const timer = setTimeout(() => {
+      setFlashingKeys(prev => {
+        const next = { ...prev };
+        delete next[k];
+        return next;
+      });
+    }, 240);
+
+    return () => clearTimeout(timer);
+  }, [keyFeedback]);
 
   // Track physical key presses for visual depression
   useEffect(() => {
     const handleKeyDown = (e) => {
       const k = e.key.toLowerCase();
-      setActiveKeys(prev => ({ ...prev, [k]: true, [e.code.toLowerCase()]: true }));
+      const code = e.code.toLowerCase();
+      setActiveKeys(prev => ({ ...prev, [k]: true, [code]: true }));
     };
 
     const handleKeyUp = (e) => {
       const k = e.key.toLowerCase();
-      setActiveKeys(prev => ({ ...prev, [k]: false, [e.code.toLowerCase()]: false }));
+      const code = e.code.toLowerCase();
+      setActiveKeys(prev => ({ ...prev, [k]: false, [code]: false }));
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -113,7 +139,34 @@ export default function VirtualKeyboard({
     };
   }, []);
 
-  const normalizedTarget = (targetChar === ' ' ? ' ' : targetChar.toLowerCase());
+  // Determine which key is the target and whether shift is required
+  let targetBaseKey = '';
+  let needsShift = false;
+
+  if (targetChar) {
+    if (targetChar === ' ') {
+      targetBaseKey = ' ';
+    } else {
+      for (const row of KEYBOARD_LAYOUT) {
+        for (const item of row) {
+          if (item.key === targetChar || item.key.toLowerCase() === targetChar.toLowerCase()) {
+            targetBaseKey = item.key.toLowerCase();
+            // Check if uppercase required
+            if (targetChar !== ' ' && targetChar === targetChar.toUpperCase() && targetChar !== targetChar.toLowerCase()) {
+              needsShift = true;
+            }
+            break;
+          }
+          if (item.shift === targetChar) {
+            targetBaseKey = item.key.toLowerCase();
+            needsShift = true;
+            break;
+          }
+        }
+        if (targetBaseKey) break;
+      }
+    }
+  }
 
   return (
     <div className="virtual-keyboard-card">
@@ -121,14 +174,31 @@ export default function VirtualKeyboard({
         <div key={rIdx} className="keyboard-row">
           {row.map((item, cIdx) => {
             const keyLower = item.key.toLowerCase();
-            const isTarget = normalizedTarget === keyLower || (item.key === ' ' && normalizedTarget === ' ');
-            const isPressed = Boolean(activeKeys[keyLower] || activeKeys[item.key.toLowerCase()]);
-            const isErrorHighlight = isLastError && lastPressedKey && lastPressedKey.toLowerCase() === keyLower;
+            const isBaseTarget = targetBaseKey && keyLower === targetBaseKey;
+            const isShiftTarget = needsShift && (item.key === 'Shift' || item.key === 'ShiftRight');
+            const isTarget = Boolean(isBaseTarget || isShiftTarget);
+
+            const isPressed = Boolean(
+              activeKeys[keyLower] ||
+              activeKeys[item.key.toLowerCase()] ||
+              (item.key === ' ' && activeKeys[' '])
+            );
+
+            const flashClass = flashingKeys[keyLower] ||
+              (item.shift && flashingKeys[item.shift.toLowerCase()]) ||
+              (item.key === ' ' && flashingKeys[' ']) ||
+              '';
+
+            const isErrorHighlight = isLastError && lastPressedKey && (
+              lastPressedKey.toLowerCase() === keyLower ||
+              (item.shift && lastPressedKey === item.shift)
+            );
 
             let extraClasses = item.class || '';
             if (isTarget) extraClasses += ' target';
             if (isPressed) extraClasses += ' pressed';
-            if (isErrorHighlight) extraClasses += ' wrong';
+            if (flashClass) extraClasses += ` ${flashClass}`;
+            else if (isErrorHighlight) extraClasses += ' wrong';
 
             return (
               <div

@@ -30,19 +30,22 @@ export default function TypingTestView({
   const [difficulty, setDifficulty] = useState(initialSettings.difficulty || 'Easy');
   const [category, setCategory] = useState(initialSettings.category || 'Random Text');
 
+  const isCustomMode = duration === 'custom' || duration === 0;
+
   const [promptText, setPromptText] = useState('Loading typing prompt...');
   const [promptSource, setPromptSource] = useState('local');
   const [isLoadingPrompt, setIsLoadingPrompt] = useState(false);
 
   // Typing test runtime states
   const [status, setStatus] = useState('idle'); // 'idle', 'running', 'paused', 'finished'
-  const [timeLeft, setTimeLeft] = useState(duration);
+  const [timeLeft, setTimeLeft] = useState(isCustomMode ? 0 : (typeof duration === 'number' ? duration : 60));
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   // Typing buffers
   const [typedInput, setTypedInput] = useState('');
   const [lastPressedKey, setLastPressedKey] = useState('');
   const [isLastError, setIsLastError] = useState(false);
+  const [keyFeedback, setKeyFeedback] = useState(null);
 
   // Live calculated stats
   const [liveWpm, setLiveWpm] = useState(0);
@@ -50,13 +53,13 @@ export default function TypingTestView({
   const [charCount, setCharCount] = useState(0);
   const [errorCount, setErrorCount] = useState(0);
 
-  // Live chart history (recorded every second)
+  // Live chart history (recorded on 1-second debounce)
   const [liveWpmHistory, setLiveWpmHistory] = useState([0]);
   const [liveAccHistory, setLiveAccHistory] = useState([100]);
 
-  // Audio settings
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [soundType, setSoundType] = useState('blue');
+  // Audio settings synchronized with soundSynthesizer
+  const [soundEnabled, setSoundEnabled] = useState(() => soundSynth.enabled);
+  const [soundType, setSoundType] = useState(() => soundSynth.switchType || 'blue');
 
   // Result modal state
   const [resultModalData, setResultModalData] = useState(null);
@@ -65,12 +68,18 @@ export default function TypingTestView({
   const arenaRef = useRef(null);
   const timerIntervalRef = useRef(null);
   const keystrokesRef = useRef([]);
+  const latestMetricsRef = useRef({ wpm: 0, accuracy: 100 });
+  const typedInputRef = useRef('');
+  const startTimeRef = useRef(null);
+  const elapsedSecondsRef = useRef(0);
+  const charCountRef = useRef(0);
+  const errorCountRef = useRef(0);
 
-  // Load Prompt from Backend (Step 1 & 2 in Architecture)
-  const loadPrompt = useCallback(async (cat, diff) => {
+  // Load Prompt from Backend with duration scaling and previous text exclusion
+  const loadPrompt = useCallback(async (cat, diff, prevText = '', dur = duration) => {
     setIsLoadingPrompt(true);
     try {
-      const res = await supabaseService.fetchPrompt(cat, diff);
+      const res = await supabaseService.fetchPrompt(cat, diff, prevText, dur);
       if (res && res.prompt) {
         setPromptText(res.prompt.text);
         setPromptSource(res.source);
@@ -80,36 +89,53 @@ export default function TypingTestView({
     } finally {
       setIsLoadingPrompt(false);
     }
-  }, []);
+  }, [duration]);
 
   useEffect(() => {
-    loadPrompt(category, difficulty);
-  }, [category, difficulty, loadPrompt]);
+    if (initialSettings.customPrompt) {
+      setPromptText(initialSettings.customPrompt);
+      setPromptSource('drill');
+      if (initialSettings.category) setCategory(initialSettings.category);
+      if (initialSettings.difficulty) setDifficulty(initialSettings.difficulty);
+    } else {
+      loadPrompt(category, difficulty, '', duration);
+    }
+  }, [category, difficulty, duration, initialSettings.customPrompt, loadPrompt]);
 
-  // Reset test state
-  const resetTest = useCallback(() => {
+  // Reset test state and load fresh prompt
+  const resetTest = useCallback((fetchNew = false) => {
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     setStatus('idle');
-    setTimeLeft(duration);
+    setTimeLeft(isCustomMode ? 0 : (typeof duration === 'number' ? duration : 60));
     setElapsedSeconds(0);
     setTypedInput('');
+    typedInputRef.current = '';
+    startTimeRef.current = null;
+    elapsedSecondsRef.current = 0;
+    charCountRef.current = 0;
+    errorCountRef.current = 0;
     setLastPressedKey('');
     setIsLastError(false);
+    setKeyFeedback(null);
     setLiveWpm(0);
     setLiveAccuracy(100);
     setCharCount(0);
     setErrorCount(0);
+    latestMetricsRef.current = { wpm: 0, accuracy: 100 };
     setLiveWpmHistory([0]);
     setLiveAccHistory([100]);
     keystrokesRef.current = [];
     setResultModalData(null);
+    if (fetchNew) {
+      loadPrompt(category, difficulty, promptText, duration);
+    }
     if (inputRef.current) {
       inputRef.current.focus();
     }
-  }, [duration]);
+  }, [duration, isCustomMode, category, difficulty, promptText, loadPrompt]);
 
   useEffect(() => {
-    resetTest();
+    resetTest(false);
   }, [duration, resetTest]);
 
   // Focus input automatically
@@ -119,35 +145,42 @@ export default function TypingTestView({
     }
   };
 
-  // Timer Tick Loop
+  // Dedicated 1-second timer tick & debounced live chart loop (decoupled from keystroke bursts)
   useEffect(() => {
-    if (status === 'running') {
-      timerIntervalRef.current = setInterval(() => {
+    if (status !== 'running') {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      return;
+    }
+
+    timerIntervalRef.current = setInterval(() => {
+      elapsedSecondsRef.current += 1;
+      if (isCustomMode) {
+        // Stopwatch / Count-Up Mode
+        setElapsedSeconds((sec) => sec + 1);
+      } else {
+        // Countdown Mode
         setTimeLeft((prev) => {
           if (prev <= 1) {
             clearInterval(timerIntervalRef.current);
-            finishTest();
+            const nominalDur = typeof duration === 'number' ? duration : 60;
+            finishTest(undefined, undefined, undefined, undefined, nominalDur);
             return 0;
           }
           return prev - 1;
         });
+        setElapsedSeconds((sec) => sec + 1);
+      }
 
-        setElapsedSeconds((sec) => {
-          const nextSec = sec + 1;
-          // Record live history
-          setLiveWpmHistory((prev) => [...prev.slice(-14), liveWpm]);
-          setLiveAccHistory((prev) => [...prev.slice(-14), liveAccuracy]);
-          return nextSec;
-        });
-      }, 1000);
-    } else {
-      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    }
+      // Record live chart history strictly on 1-second interval debounce
+      const current = latestMetricsRef.current;
+      setLiveWpmHistory((prev) => [...prev.slice(-14), current.wpm]);
+      setLiveAccHistory((prev) => [...prev.slice(-14), current.accuracy]);
+    }, 1000);
 
     return () => {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
-  }, [status, liveWpm, liveAccuracy]);
+  }, [status, isCustomMode, duration]);
 
   // Handle typing input
   const handleInputChange = (e) => {
@@ -155,20 +188,20 @@ export default function TypingTestView({
 
     if (status === 'idle') {
       setStatus('running');
+      startTimeRef.current = Date.now();
+      elapsedSecondsRef.current = 0;
     }
 
     const val = e.target.value;
-    const key = val.slice(-1);
     const prevLen = typedInput.length;
     const isAdding = val.length > prevLen;
 
     setTypedInput(val);
+    typedInputRef.current = val;
     setCharCount(val.length);
+    charCountRef.current = val.length;
 
-    const now = Date.now();
-    keystrokesRef.current.push({ char: key, timestamp: now });
-
-    // Calculate errors
+    // Calculate errors & correct chars
     let errors = 0;
     let correctChars = 0;
     for (let i = 0; i < val.length; i++) {
@@ -179,26 +212,45 @@ export default function TypingTestView({
       }
     }
     setErrorCount(errors);
+    errorCountRef.current = errors;
 
     // Audio & Keyboard state
     if (isAdding) {
+      const key = val.slice(-1);
       const isCurrentCharError = val[val.length - 1] !== promptText[val.length - 1];
       setIsLastError(isCurrentCharError);
       setLastPressedKey(key);
+      setKeyFeedback({
+        key,
+        isCorrect: !isCurrentCharError,
+        id: Date.now() + Math.random()
+      });
 
       if (isCurrentCharError) {
         soundSynth.playErrorSound();
       } else {
         soundSynth.playKeySound(key === ' ');
       }
+      keystrokesRef.current.push({ char: key, timestamp: Date.now() });
+    } else if (val.length < prevLen) {
+      // Backspace pressed
+      soundSynth.playBackspaceSound();
+      setIsLastError(false);
+      setLastPressedKey('Backspace');
+      setKeyFeedback({
+        key: 'Backspace',
+        isCorrect: true,
+        id: Date.now() + Math.random()
+      });
     }
 
     // Live Metrics calculation
-    const currentElapsed = Math.max(elapsedSeconds, 1);
+    const currentElapsed = Math.max(elapsedSecondsRef.current || 1, 1);
     const minutes = currentElapsed / 60;
     const calculatedWpm = Math.max(0, Math.round((correctChars / 5) / minutes));
     const accuracyCalc = val.length > 0 ? Math.round((correctChars / val.length) * 100) : 100;
 
+    latestMetricsRef.current = { wpm: calculatedWpm, accuracy: accuracyCalc };
     setLiveWpm(calculatedWpm);
     setLiveAccuracy(accuracyCalc);
 
@@ -208,9 +260,10 @@ export default function TypingTestView({
     }
   };
 
-  // Submit test to backend (Step 4 & 5 in Architecture)
-  const finishTest = async (overrideWpm, overrideAcc, overrideErr, overrideChars) => {
+  // Submit test to backend
+  const finishTest = async (overrideWpm, overrideAcc, overrideErr, overrideChars, overrideDuration) => {
     setStatus('finished');
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     soundSynth.playCompleteChime();
 
     try {
@@ -223,19 +276,41 @@ export default function TypingTestView({
       // confetti fallback
     }
 
-    const finalWpm = overrideWpm !== undefined ? overrideWpm : liveWpm;
-    const finalAccuracy = overrideAcc !== undefined ? overrideAcc : liveAccuracy;
-    const finalErrors = overrideErr !== undefined ? overrideErr : errorCount;
-    const finalChars = overrideChars !== undefined ? overrideChars : charCount;
-    const finalDuration = Math.max(elapsedSeconds, 1);
+    const currentInput = typedInputRef.current || typedInput;
+    const currentChars = overrideChars !== undefined ? overrideChars : (charCountRef.current || currentInput.length);
+    const currentErrors = overrideErr !== undefined ? overrideErr : errorCountRef.current;
+
+    // Accurate duration calculation
+    const nominalDuration = typeof duration === 'number' ? duration : 60;
+    const computedElapsed = startTimeRef.current
+      ? Math.max(1, Math.round((Date.now() - startTimeRef.current) / 1000))
+      : (elapsedSecondsRef.current || 1);
+
+    const finalDuration = overrideDuration !== undefined
+      ? overrideDuration
+      : (isCustomMode ? computedElapsed : (overrideWpm !== undefined ? computedElapsed : nominalDuration));
+
+    let correctChars = 0;
+    for (let i = 0; i < currentInput.length; i++) {
+      if (currentInput[i] === promptText[i]) correctChars++;
+    }
+
+    const accurateWpm = Math.max(0, Math.round(((correctChars / 5) / (finalDuration / 60))));
+    const finalAccuracy = overrideAcc !== undefined
+      ? overrideAcc
+      : (currentInput.length > 0 ? Math.round((correctChars / currentInput.length) * 100) : 100);
+
+    const finalWpm = overrideWpm !== undefined
+      ? overrideWpm
+      : (latestMetricsRef.current.wpm > 0 ? latestMetricsRef.current.wpm : accurateWpm);
 
     const payload = {
       wpm: finalWpm,
-      rawWpm: Math.round((finalChars / 5) / (finalDuration / 60)),
+      rawWpm: Math.round((currentChars / 5) / (finalDuration / 60)),
       accuracy: finalAccuracy,
       duration: finalDuration,
-      errors: finalErrors,
-      characters: finalChars,
+      errors: currentErrors,
+      characters: currentChars,
       elapsedSeconds: finalDuration,
       category,
       difficulty
@@ -304,16 +379,23 @@ export default function TypingTestView({
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155' }}>Test Duration</span>
           {[
-            { label: '1 min', sec: 60 },
-            { label: '3 min', sec: 180 },
-            { label: '5 min', sec: 300 },
-            { label: 'Custom', sec: 120 }
+            { label: '1 min', val: 60 },
+            { label: '3 min', val: 180 },
+            { label: '5 min', val: 300 },
+            { label: 'Custom', val: 'custom' }
           ].map((item) => (
             <button
               key={item.label}
-              className={`pill-btn ${duration === item.sec ? 'active' : ''}`}
-              onClick={() => setDuration(item.sec)}
-              style={duration === item.sec ? { background: '#2563eb', color: '#ffffff' } : {}}
+              className={`pill-btn ${duration === item.val ? 'active' : ''}`}
+              onClick={() => {
+                setDuration(item.val);
+                setTimeLeft(item.val === 'custom' ? 0 : item.val);
+                setStatus('idle');
+                setElapsedSeconds(0);
+                setTypedInput('');
+                loadPrompt(category, difficulty, promptText, item.val);
+              }}
+              style={duration === item.val ? { background: '#2563eb', color: '#ffffff' } : {}}
             >
               {item.label}
             </button>
@@ -365,7 +447,29 @@ export default function TypingTestView({
             <option value="Quotes">Quotes</option>
             <option value="Literature">Literature</option>
             <option value="Programming">Programming</option>
+            <option value="Science & Nature">Science & Nature</option>
           </select>
+
+          <button
+            onClick={() => resetTest(true)}
+            disabled={isLoadingPrompt}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 14px',
+              borderRadius: '10px',
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              color: '#2563eb',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              cursor: 'pointer'
+            }}
+            title="Load another typing prompt and reset test"
+          >
+            <Sparkles size={14} /> {isLoadingPrompt ? 'Loading...' : 'New Text'}
+          </button>
         </div>
       </div>
 
@@ -374,7 +478,7 @@ export default function TypingTestView({
         <div className="typing-test-main">
           {/* Stats Ribbon matching Image 2 */}
           <div className="test-stats-ribbon">
-            {/* Circular Timer */}
+            {/* Circular Timer (Countdown or Stopwatch Count-Up) */}
             <div className="circular-timer-container">
               <div className="timer-circle-svg">
                 <svg width="74" height="74" viewBox="0 0 74 74">
@@ -385,15 +489,22 @@ export default function TypingTestView({
                     cy="37"
                     r="30"
                     strokeDasharray={2 * Math.PI * 30}
-                    strokeDashoffset={2 * Math.PI * 30 * (1 - timeLeft / duration)}
+                    strokeDashoffset={
+                      isCustomMode
+                        ? 2 * Math.PI * 30 * (1 - (elapsedSeconds % 60) / 60)
+                        : 2 * Math.PI * 30 * (1 - timeLeft / (typeof duration === 'number' ? duration : 60))
+                    }
                   />
                 </svg>
                 <div className="timer-circle-text">
                   <div className="timer-seconds">
-                    {Math.floor(timeLeft / 60).toString().padStart(2, '0')}:
-                    {(timeLeft % 60).toString().padStart(2, '0')}
+                    {isCustomMode ? (
+                      `${Math.floor(elapsedSeconds / 60).toString().padStart(2, '0')}:${(elapsedSeconds % 60).toString().padStart(2, '0')}`
+                    ) : (
+                      `${Math.floor(timeLeft / 60).toString().padStart(2, '0')}:${(timeLeft % 60).toString().padStart(2, '0')}`
+                    )}
                   </div>
-                  <div className="timer-label">Time Left</div>
+                  <div className="timer-label">{isCustomMode ? 'Stopwatch' : 'Time Left'}</div>
                 </div>
               </div>
             </div>
@@ -444,8 +555,30 @@ export default function TypingTestView({
               </div>
             </div>
 
-            {/* Actions: Pause / Restart */}
+            {/* Actions: Finish / Pause / Restart */}
             <div className="ribbon-actions">
+              {isCustomMode && (
+                <button
+                  className="btn-control finish"
+                  onClick={() => finishTest()}
+                  style={{
+                    background: '#10b981',
+                    color: '#ffffff',
+                    border: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '8px 14px',
+                    borderRadius: '10px',
+                    fontWeight: 700,
+                    fontSize: '0.82rem',
+                    cursor: 'pointer'
+                  }}
+                  title="Finish open-ended test and submit score"
+                >
+                  <CheckCircle2 size={14} /> Finish Test
+                </button>
+              )}
               <button
                 className="btn-control pause"
                 onClick={() => {
@@ -456,7 +589,7 @@ export default function TypingTestView({
                 {status === 'paused' ? <Play size={14} /> : <Pause size={14} />}
                 {status === 'paused' ? 'Resume' : 'Pause'}
               </button>
-              <button className="btn-control restart" onClick={resetTest}>
+              <button className="btn-control restart" onClick={() => resetTest(false)}>
                 <RotateCcw size={14} />
                 Restart
               </button>
@@ -475,12 +608,22 @@ export default function TypingTestView({
               className="hidden-type-input"
               value={typedInput}
               onChange={handleInputChange}
+              onKeyDown={(e) => {
+                if (e.key === 'Backspace') {
+                  soundSynth.playBackspaceSound();
+                  setKeyFeedback({
+                    key: 'Backspace',
+                    isCorrect: true,
+                    id: Date.now() + Math.random()
+                  });
+                }
+              }}
               disabled={status === 'paused' || status === 'finished'}
               autoFocus
             />
 
             {isLoadingPrompt ? (
-              <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Fetching text from Supabase database...</div>
+              <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Fetching text from database...</div>
             ) : (
               <div>
                 {words.map((word, wIdx) => {
@@ -540,6 +683,7 @@ export default function TypingTestView({
             targetChar={targetChar}
             lastPressedKey={lastPressedKey}
             isLastError={isLastError}
+            keyFeedback={keyFeedback}
             soundEnabled={soundEnabled}
             setSoundEnabled={setSoundEnabled}
             soundType={soundType}
@@ -723,7 +867,7 @@ export default function TypingTestView({
             {/* Modal actions */}
             <div style={{ display: 'flex', gap: '12px' }}>
               <button
-                onClick={resetTest}
+                onClick={() => resetTest(true)}
                 style={{
                   flex: 1,
                   padding: '12px',

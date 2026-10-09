@@ -2,9 +2,9 @@ import React from 'react';
 import { Flame, Trophy, Target, Star, Zap, Award, Calendar, CheckCircle } from 'lucide-react';
 
 export default function ProgressView({ dashboardData }) {
-  const { streak, achievements, user, recentTests } = dashboardData;
+  const { streak, achievements = [], user, recentTests = [] } = dashboardData || {};
 
-  // Generate 35 days heatmap cells based on actual data
+  // Generate 35 days heatmap cells strictly based on real completed tests
   const days = Array.from({ length: 35 }, (_, i) => {
     const d = new Date();
     d.setDate(d.getDate() - (34 - i));
@@ -20,21 +20,19 @@ export default function ProgressView({ dashboardData }) {
     else if (testsOnDay > 1) level = 2;
     else if (testsOnDay === 1) level = 1;
 
-    // Optional: if it's mock data and missing tests, we can fall back to the old static visual if we want, 
-    // but the user wants it dynamic, so it will reflect their true practice data.
     return { day: d.getDate(), active, level, dateStr, testsOnDay };
   });
 
   const practiceDaysCount = days.filter(d => d.active).length;
   const practiceRate = Math.round((practiceDaysCount / 35) * 100);
-  const masteryLevel = Math.floor((user?.tests_completed || 0) / 10) + 1;
+  const masteryLevel = Math.max(1, Math.floor((user?.tests_completed || 0) / 5) + 1);
 
   return (
     <div className="page-container">
       <div className="greeting-header">
         <div className="greeting-text">
           <h1>Progress & Practice Consistency</h1>
-          <p>Track your daily typing habits, milestones, and unlocked masteries.</p>
+          <p>Track your daily typing habits, milestones, and unlocked masteries in real time.</p>
         </div>
       </div>
 
@@ -46,8 +44,10 @@ export default function ProgressView({ dashboardData }) {
             <span className="stat-label">Current Streak</span>
           </div>
           <div className="stat-card-bottom">
-            <span className="stat-value">{streak?.current_streak || 12} Days</span>
-            <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 700 }}>Active</span>
+            <span className="stat-value">{streak?.current_streak || 0} Days</span>
+            <span style={{ fontSize: '0.75rem', color: (streak?.current_streak || 0) > 0 ? '#10b981' : '#64748b', fontWeight: 700 }}>
+              {(streak?.current_streak || 0) > 0 ? 'Active' : 'Not started'}
+            </span>
           </div>
         </div>
 
@@ -57,8 +57,8 @@ export default function ProgressView({ dashboardData }) {
             <span className="stat-label">Longest Streak</span>
           </div>
           <div className="stat-card-bottom">
-            <span className="stat-value">{streak?.longest_streak || 18} Days</span>
-            <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Record</span>
+            <span className="stat-value">{streak?.longest_streak || 0} Days</span>
+            <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Personal Record</span>
           </div>
         </div>
 
@@ -80,7 +80,7 @@ export default function ProgressView({ dashboardData }) {
           </div>
           <div className="stat-card-bottom">
             <span className="stat-value">
-              {achievements?.filter(a => a.unlocked).length || 4} / {achievements?.length || 6}
+              {achievements?.filter(a => a.unlocked).length || 0} / {achievements?.length || 8}
             </span>
           </div>
         </div>
@@ -92,7 +92,9 @@ export default function ProgressView({ dashboardData }) {
           </div>
           <div className="stat-card-bottom">
             <span className="stat-value">Level {masteryLevel}</span>
-            <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: 700 }}>{masteryLevel >= 10 ? 'Pro' : 'Novice'}</span>
+            <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: 700 }}>
+              {masteryLevel >= 5 ? 'Pro' : masteryLevel >= 2 ? 'Apprentice' : 'Beginner'}
+            </span>
           </div>
         </div>
       </div>
@@ -105,6 +107,10 @@ export default function ProgressView({ dashboardData }) {
             <h3>Daily Practice Heatmap (Last 5 Weeks)</h3>
           </div>
         </div>
+
+        <p style={{ fontSize: '0.82rem', color: '#64748b', marginBottom: '8px' }}>
+          Real-time activity recorded each calendar day from your anti-cheat verified test logs.
+        </p>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '8px', maxWidth: '420px', marginTop: '12px' }}>
           {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d, idx) => (
@@ -133,7 +139,8 @@ export default function ProgressView({ dashboardData }) {
                   fontSize: '0.7rem',
                   fontWeight: 600,
                   color: item.level > 2 ? '#ffffff' : '#334155',
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  border: item.level === 0 ? '1px solid #e2e8f0' : 'none'
                 }}
               >
                 {item.day}
@@ -158,7 +165,7 @@ export default function ProgressView({ dashboardData }) {
               key={ach.id}
               className="achievement-item"
               style={{
-                opacity: ach.unlocked ? 1 : 0.5,
+                opacity: ach.unlocked ? 1 : 0.6,
                 background: ach.unlocked ? '#f8fafc' : '#f1f5f9',
                 border: ach.unlocked ? '1px solid #e2e8f0' : '1px dashed #cbd5e1'
               }}

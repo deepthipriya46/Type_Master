@@ -96,6 +96,28 @@ export default function LoginView({ onLoginSuccess, onCancel, onOpenSupabaseModa
     }
   };
 
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    if (!email) {
+      setErrorMsg('Please enter your email address to receive password reset instructions.');
+      return;
+    }
+    setErrorMsg('');
+    setLoading(true);
+    try {
+      const res = await supabaseService.resetPasswordForEmail(email);
+      if (res.success) {
+        setSuccessMsg(res.message);
+      } else {
+        setErrorMsg(res.message || 'Failed to send reset link.');
+      }
+    } catch (err) {
+      setErrorMsg(err.message || 'An unexpected error occurred during password recovery.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -354,6 +376,25 @@ export default function LoginView({ onLoginSuccess, onCancel, onOpenSupabaseModa
               </div>
             </div>
 
+            {/* Forgot Password Link */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '-4px' }}>
+              <button
+                type="button"
+                onClick={() => { setMode('forgot'); setErrorMsg(''); setSuccessMsg(''); }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  color: '#2563eb',
+                  cursor: 'pointer',
+                  padding: '2px 0'
+                }}
+              >
+                Forgot password?
+              </button>
+            </div>
+
             <button
               type="submit"
               disabled={loading}
@@ -371,12 +412,84 @@ export default function LoginView({ onLoginSuccess, onCancel, onOpenSupabaseModa
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '8px',
-                marginTop: '10px',
+                marginTop: '6px',
                 boxShadow: '0 4px 14px rgba(37, 99, 235, 0.35)'
               }}
             >
               {loading ? 'Authenticating...' : 'Sign In to Dashboard'}
               <ArrowRight size={16} />
+            </button>
+          </form>
+        )}
+
+        {/* Forgot Password Recovery Form */}
+        {mode === 'forgot' && (
+          <form onSubmit={handleForgotPassword} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ textAlign: 'center', marginBottom: '6px' }}>
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#1e293b' }}>
+                Recover Your Password
+              </h3>
+              <p style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '2px' }}>
+                Enter your account email to receive reset instructions.
+              </p>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Email Address</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="email"
+                  className="form-input"
+                  style={{ width: '100%', paddingLeft: '38px' }}
+                  placeholder="name@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+                <Mail size={16} color="#94a3b8" style={{ position: 'absolute', left: '12px', top: '13px' }} />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              style={{
+                width: '100%',
+                padding: '13px',
+                borderRadius: '12px',
+                background: '#2563eb',
+                color: '#ffffff',
+                border: 'none',
+                fontWeight: 700,
+                fontSize: '0.92rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                marginTop: '6px',
+                boxShadow: '0 4px 14px rgba(37, 99, 235, 0.35)'
+              }}
+            >
+              {loading ? 'Sending Recovery Link...' : 'Send Password Reset Link'}
+              <ArrowRight size={16} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setMode('signin'); setErrorMsg(''); setSuccessMsg(''); }}
+              style={{
+                background: 'none',
+                border: 'none',
+                fontSize: '0.84rem',
+                fontWeight: 700,
+                color: '#64748b',
+                cursor: 'pointer',
+                padding: '8px 0',
+                textAlign: 'center'
+              }}
+            >
+              ← Back to Sign In
             </button>
           </form>
         )}

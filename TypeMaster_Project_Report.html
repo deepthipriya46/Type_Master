@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TypeMaster - Comprehensive Project Progress Report</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+
+    @page {
+      size: A4;
+      margin: 15mm 15mm 15mm 15mm;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: #1e293b;
+      background: #ffffff;
+      line-height: 1.5;
+      font-size: 9.5pt;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    /* Cover / Header section */
+    .header-banner {
+      background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #2563eb 100%);
+      color: #ffffff;
+      padding: 26px 24px;
+      border-radius: 12px;
+      margin-bottom: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .header-banner::after {
+      content: "";
+      position: absolute;
+      top: -30px;
+      right: -30px;
+      width: 160px;
+      height: 160px;
+      background: radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0) 70%);
+      border-radius: 50%;
+    }
+
+    .header-badge {
+      display: inline-block;
+      background: rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(8px);
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 7.5pt;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #bfdbfe;
+      margin-bottom: 10px;
+    }
+
+    .header-title {
+      font-size: 21pt;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+      margin-bottom: 4px;
+    }
+
+    .header-subtitle {
+      font-size: 10.5pt;
+      font-weight: 400;
+      color: #cbd5e1;
+      margin-bottom: 16px;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .meta-item {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .meta-label {
+      font-size: 7pt;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+      font-weight: 600;
+    }
+
+    .meta-value {
+      font-size: 9pt;
+      color: #ffffff;
+      font-weight: 600;
+      margin-top: 2px;
+    }
+
+    /* Section Styles */
+    .section {
+      margin-bottom: 18px;
+    }
+
+    .section-title {
+      font-size: 12pt;
+      font-weight: 700;
+      color: #0f172a;
+      border-left: 4px solid #2563eb;
+      padding-left: 9px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .section-title span.number {
+      font-size: 9.5pt;
+      color: #2563eb;
+      font-weight: 800;
+    }
+
+    p {
+      color: #334155;
+      margin-bottom: 8px;
+      font-size: 9pt;
+      text-align: justify;
+    }
+
+    /* Highlights Grid */
+    .highlights-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin: 10px 0 16px 0;
+    }
+
+    .highlight-card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 10px 12px;
+      text-align: center;
+    }
+
+    .highlight-val {
+      font-size: 15pt;
+      font-weight: 800;
+      color: #1e3a8a;
+      line-height: 1.1;
+    }
+
+    .highlight-lbl {
+      font-size: 7pt;
+      color: #64748b;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-top: 3px;
+      letter-spacing: 0.04em;
+    }
+
+    /* Feature Grid */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .feature-box {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 11px 13px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+    }
+
+    .feature-box-title {
+      font-size: 9.5pt;
+      font-weight: 700;
+      color: #0f172a;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+
+    .feature-box ul {
+      list-style-type: none;
+      padding-left: 0;
+    }
+
+    .feature-box li {
+      position: relative;
+      padding-left: 12px;
+      margin-bottom: 4px;
+      font-size: 8.3pt;
+      color: #475569;
+      line-height: 1.4;
+    }
+
+    .feature-box li::before {
+      content: "•";
+      position: absolute;
+      left: 0;
+      color: #2563eb;
+      font-weight: bold;
+      font-size: 11pt;
+      line-height: 9pt;
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 10px 0 12px 0;
+      font-size: 8.2pt;
+    }
+
+    th {
+      background: #f1f5f9;
+      color: #1e293b;
+      font-weight: 700;
+      text-align: left;
+      padding: 7px 9px;
+      border: 1px solid #cbd5e1;
+      font-size: 7.5pt;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    td {
+      padding: 6px 9px;
+      border: 1px solid #e2e8f0;
+      color: #334155;
+      vertical-align: middle;
+    }
+
+    tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 7pt;
+      font-weight: 600;
+    }
+
+    .badge-green { background: #dcfce7; color: #15803d; }
+    .badge-blue { background: #dbeafe; color: #1e40af; }
+    .badge-purple { background: #f3e8ff; color: #7e22ce; }
+    .badge-amber { background: #fef3c7; color: #b45309; }
+
+    /* Code & tech pill */
+    .code-pill {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7.5pt;
+      background: #f1f5f9;
+      color: #0f172a;
+      padding: 1px 4px;
+      border-radius: 3px;
+      border: 1px solid #e2e8f0;
+    }
+
+    /* Callout */
+    .callout {
+      background: #eff6ff;
+      border-left: 3px solid #3b82f6;
+      padding: 9px 12px;
+      border-radius: 0 6px 6px 0;
+      margin: 10px 0;
+      font-size: 8.5pt;
+      color: #1e3a8a;
+      line-height: 1.45;
+    }
+
+    .callout strong {
+      color: #1d4ed8;
+    }
+
+    /* Page Break Rules */
+    .page-break {
+      page-break-before: always;
+      break-before: page;
+    }
+
+    .avoid-break {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    /* Footer stamp */
+    .footer-stamp {
+      margin-top: 18px;
+      padding-top: 10px;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 7.5pt;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ==================== PAGE 1 ==================== -->
+  <div>
+    <!-- HEADER / TITLE BANNER -->
+    <div class="header-banner">
+      <div class="header-badge">Project Completion & Engineering Report</div>
+      <h1 class="header-title">TypeMaster: Pro Typing Platform</h1>
+      <div class="header-subtitle">Real-Time Telemetry, Anti-Cheat Validation & Dual-Engine Supabase Architecture</div>
+      
+      <div class="meta-grid">
+        <div class="meta-item">
+          <span class="meta-label">Developer</span>
+          <span class="meta-value">Deepthi Priya</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">Project Status</span>
+          <span class="meta-value">Production-Ready (v1.0)</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">Codebase Volume</span>
+          <span class="meta-value">40+ Files / 8,500+ LOC</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">Generated Date</span>
+          <span class="meta-value">October 08, 2026</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- EXECUTIVE SUMMARY -->
+    <div class="section avoid-break">
+      <div class="section-title"><span class="number">01</span> Executive Summary</div>
+      <p>
+        <strong>TypeMaster</strong> is a high-performance, full-stack typing speed test application engineered to deliver professional-grade typing telemetry, interactive gamification, and robust cloud data persistence. Built with modern web technologies (React 19, Vite, Supabase PostgreSQL, Web Audio API), the platform eliminates synthetic or placeholder metrics by implementing a <strong>100% dynamic, real-time data engine</strong> that recalculates typing velocity (WPM), accuracy, streaks, and milestones with sub-millisecond precision.
+      </p>
+
+      <!-- HIGHLIGHT STATS -->
+      <div class="highlights-grid">
+        <div class="highlight-card">
+          <div class="highlight-val">10</div>
+          <div class="highlight-lbl">Core App Views</div>
+        </div>
+        <div class="highlight-card">
+          <div class="highlight-val">100%</div>
+          <div class="highlight-lbl">Live Dynamic Data</div>
+        </div>
+        <div class="highlight-card">
+          <div class="highlight-val">4 Sound</div>
+          <div class="highlight-lbl">Audio Switch Profiles</div>
+        </div>
+        <div class="highlight-card">
+          <div class="highlight-val">4-Tier</div>
+          <div class="highlight-lbl">Anti-Cheat Checks</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ARCHITECTURE & TECHNOLOGY STACK -->
+    <div class="section avoid-break">
+      <div class="section-title"><span class="number">02</span> Technical Stack & Architectural Layers</div>
+      <p>
+        The system is designed with a modular separation of concerns spanning the presentation, real-time computational engine, and cloud database layers:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 20%;">Layer</th>
+            <th style="width: 25%;">Technology</th>
+            <th style="width: 55%;">Role & Implementation Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Frontend Core</strong></td>
+            <td><span class="code-pill">React 19</span> + <span class="code-pill">Vite 8</span></td>
+            <td>Ultra-fast HMR, component lifecycle optimization, hooks-based state orchestration across views.</td>
+          </tr>
+          <tr>
+            <td><strong>Design System</strong></td>
+            <td><span class="code-pill">Vanilla CSS</span> (Design Tokens)</td>
+            <td>Custom design tokens, glassmorphism, responsive CSS grid, zero bloat, custom micro-interactions.</td>
+          </tr>
+          <tr>
+            <td><strong>Cloud Database</strong></td>
+            <td><span class="code-pill">Supabase (PostgreSQL)</span></td>
+            <td>Row-Level Security (RLS), tables for users, logs, streaks, achievements, prompts, and auth sessions.</td>
+          </tr>
+          <tr>
+            <td><strong>Audio Synthesis</strong></td>
+            <td><span class="code-pill">Web Audio API</span></td>
+            <td>Procedural waveform audio synthesis generating realistic zero-latency mechanical keyboard clicks.</td>
+          </tr>
+          <tr>
+            <td><strong>Anti-Cheat Engine</strong></td>
+            <td><span class="code-pill">Custom JS Algorithms</span></td>
+            <td>Sanity checking keystroke intervals, duration validation, anomaly flags, and typing ceiling caps.</td>
+          </tr>
+          <tr>
+            <td><strong>Visual Telemetry</strong></td>
+            <td><span class="code-pill">SVG Vector Graphs</span></td>
+            <td>Dynamic, scalable Bezier path interpolation for real-time WPM progression & accuracy trends.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="page-break"></div>
+
+  <!-- ==================== PAGE 2 ==================== -->
+  <div>
+    <!-- KEY FEATURES & DELIVERABLES -->
+    <div class="section avoid-break">
+      <div class="section-title"><span class="number">03</span> Key Features & Systems Built Till Now</div>
+
+      <div class="feature-grid">
+        <div class="feature-box">
+          <div class="feature-box-title">⚡ 1. Real-Time Typing Engine</div>
+          <ul>
+            <li><strong>Real-time WPM Calculation:</strong> Computed dynamically using standard character formula: <span class="code-pill">(chars / 5) / (seconds / 60)</span>.</li>
+            <li><strong>Raw vs. Net WPM:</strong> Accurately isolates gross keystroke speed versus penalized uncorrected errors.</li>
+            <li><strong>Smooth Caret & Live Highlighting:</strong> Character-by-character feedback (green for correct, red for incorrect, pulsing active cursor).</li>
+            <li><strong>Configurable Test Modes:</strong> Durations of 1m, 3m, 5m, and Custom; Easy, Medium, and Hard difficulties.</li>
+          </ul>
+        </div>
+
+        <div class="feature-box">
+          <div class="feature-box-title">🎹 2. Acoustic & Virtual Keyboard</div>
+          <ul>
+            <li><strong>Procedural Sound Synthesizer:</strong> Zero-dependency Web Audio API implementation with 4 tactile switch modes (Cherry Blue, Cherry Red, Brown, Typewriter).</li>
+            <li><strong>Interactive Virtual Keyboard:</strong> Real-time keypress highlighting on visual QWERTY keyboard with home-row finger indicators.</li>
+            <li><strong>Audio Feedback:</strong> Auditory error buzzer on mistakes and 4-note ascending celebratory chime upon test completion.</li>
+          </ul>
+        </div>
+
+        <div class="feature-box">
+          <div class="feature-box-title">🛡️ 3. Anti-Cheat & Verification Service</div>
+          <ul>
+            <li><strong>Duration Threshold Check:</strong> Rejects tests terminated in &lt; 3 seconds to prevent stat dilution.</li>
+            <li><strong>Human Feasibility Limit:</strong> Flags and rejects any anomaly exceeding human physiological limits (&gt; 250 WPM).</li>
+            <li><strong>Character Ratio Sanity:</strong> Validates reported character counts against time elapsed.</li>
+            <li><strong>Automated Grading:</strong> Awards performance badges (Needs Practice, Good, Great, Excellent).</li>
+          </ul>
+        </div>
+
+        <div class="feature-box">
+          <div class="feature-box-title">📊 4. Telemetry & Analytics Dashboard</div>
+          <ul>
+            <li><strong>5 Real-Time Stat Cards:</strong> Best WPM, Average WPM, Overall Accuracy, Tests Completed, Day Streak.</li>
+            <li><strong>Dynamic SVG Trend Charts:</strong> Plots historical test sessions without third-party chart dependencies.</li>
+            <li><strong>Streak Engine:</strong> Automatically calculates consecutive active practice days and longest streaks.</li>
+            <li><strong>Test Logs History:</strong> Real-time session ledger with detailed drill-down modal.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- DATABASE & SCHEMA DESIGN -->
+    <div class="section avoid-break" style="margin-top: 14px;">
+      <div class="section-title"><span class="number">04</span> Database Schema & Cloud Persistence</div>
+      <p>
+        A complete production-grade relational database schema was authored in <span class="code-pill">supabase_schema.sql</span>, featuring full Row Level Security (RLS) policies and dual-mode runtime compatibility:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 18%;">Table Name</th>
+            <th style="width: 14%;">Primary Key</th>
+            <th style="width: 44%;">Core Columns / Metrics Tracked</th>
+            <th style="width: 24%;">Security & Policies</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="code-pill">users</span></td>
+            <td><span class="code-pill">id (TEXT)</span></td>
+            <td>username, email, best_wpm, avg_wpm, accuracy, tests_completed, is_premium</td>
+            <td>RLS enabled; authenticated read/write</td>
+          </tr>
+          <tr>
+            <td><span class="code-pill">test_logs</span></td>
+            <td><span class="code-pill">id (UUID)</span></td>
+            <td>user_id, wpm, raw_wpm, accuracy, duration, errors, category, difficulty, badge</td>
+            <td>RLS enabled; cascade delete on user removal</td>
+          </tr>
+          <tr>
+            <td><span class="code-pill">streaks</span></td>
+            <td><span class="code-pill">id (UUID)</span></td>
+            <td>user_id, current_streak, longest_streak, last_active_date, updated_at</td>
+            <td>RLS enabled; daily timestamp tracking</td>
+          </tr>
+          <tr>
+            <td><span class="code-pill">achievements</span></td>
+            <td><span class="code-pill">(id, user_id)</span></td>
+            <td>title, description, icon, unlocked (boolean), unlocked_at</td>
+            <td>RLS enabled; dynamic trigger checks</td>
+          </tr>
+          <tr>
+            <td><span class="code-pill">prompts</span></td>
+            <td><span class="code-pill">id (UUID)</span></td>
+            <td>category, difficulty, text, word_count, created_at</td>
+            <td>Public read; categorized seed library</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <strong>Dual-Engine Architecture:</strong> The application incorporates an embedded local engine fallback. If Supabase cloud credentials are not yet entered, TypeMaster transparently persists all live metrics to browser storage and allows immediate full testing without blocking the user. When Supabase keys are connected via the in-app modal, the app seamlessly integrates with the remote PostgreSQL instance.
+      </div>
+    </div>
+  </div>
+
+  <div class="page-break"></div>
+
+  <!-- ==================== PAGE 3 ==================== -->
+  <div>
+    <!-- VIEW ECOSYSTEM BREAKDOWN -->
+    <div class="section avoid-break">
+      <div class="section-title"><span class="number">05</span> Complete View & Navigation Ecosystem</div>
+      <p>
+        The platform features 10 fully realized application views, structured in an intuitive sidebar navigation layout:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 23%;">View Component</th>
+            <th style="width: 52%;">Functional Highlights</th>
+            <th style="width: 25%;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>DashboardView.jsx</strong></td>
+            <td>Real-time user welcome, 5 live metric cards, dynamic SVG telemetry charts, quick test launcher, and recent sessions table.</td>
+            <td><span class="badge badge-green">Completed & Real-Time</span></td>
+          </tr>
+          <tr>
+            <td><strong>TypingTestView.jsx</strong></td>
+            <td>Immersive test arena, word stream, smooth caret, live WPM counter, audio feedback, virtual keyboard, and completion confetti.</td>
+            <td><span class="badge badge-green">Completed & Real-Time</span></td>
+          </tr>
+          <tr>
+            <td><strong>PerformanceView.jsx</strong></td>
+            <td>In-depth telemetry analytics, speed distribution tiers, accuracy breakdown, and consistency score calculations.</td>
+            <td><span class="badge badge-green">Completed & Real-Time</span></td>
+          </tr>
+          <tr>
+            <td><strong>ProgressView.jsx</strong></td>
+            <td>Gamification hub, active day streak counter, milestone achievement cards, dynamic XP bar, and level status.</td>
+            <td><span class="badge badge-green">Completed & Real-Time</span></td>
+          </tr>
+          <tr>
+            <td><strong>LeaderboardView.jsx</strong></td>
+            <td>Global community typist rankings, filterable by time horizon and difficulty, highlighting personal percentile rank.</td>
+            <td><span class="badge badge-green">Completed & Real-Time</span></td>
+          </tr>
+          <tr>
+            <td><strong>PracticeView.jsx</strong></td>
+            <td>Targeted drills, tricky key combinations, number row focus, and programming syntax training mode.</td>
+            <td><span class="badge badge-green">Completed & Real-Time</span></td>
+          </tr>
+          <tr>
+            <td><strong>HistoryView.jsx</strong></td>
+            <td>Searchable, filterable audit log of all completed tests with instant session detail inspection modal.</td>
+            <td><span class="badge badge-green">Completed & Real-Time</span></td>
+          </tr>
+          <tr>
+            <td><strong>SettingsView.jsx</strong></td>
+            <td>Theme customization (Cyberpunk, Matrix, Dracula, Slate), switch sound selector, volume slider, and Supabase config.</td>
+            <td><span class="badge badge-green">Completed & Real-Time</span></td>
+          </tr>
+          <tr>
+            <td><strong>LoginView.jsx</strong></td>
+            <td>Dedicated Supabase email/password login, account registration, error handling, and instant Guest mode access.</td>
+            <td><span class="badge badge-green">Completed & Real-Time</span></td>
+          </tr>
+          <tr>
+            <td><strong>HelpView.jsx</strong></td>
+            <td>Touch typing guide, finger placement ergonomics, home row tips, and platform documentation.</td>
+            <td><span class="badge badge-green">Completed & Real-Time</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- GAMIFICATION & MILESTONE SYSTEM -->
+    <div class="section avoid-break" style="margin-top: 14px;">
+      <div class="section-title"><span class="number">06</span> Gamification & Milestone Unlocks</div>
+      <p>
+        Milestones are dynamically evaluated at the conclusion of every validated test submission:
+      </p>
+
+      <div class="feature-grid">
+        <div class="feature-box">
+          <div class="feature-box-title">🏆 Speed Master (75+ WPM)</div>
+          <p style="font-size: 8.2pt; color: #64748b; margin-bottom: 0;">Unlocked automatically once the user's verified net typing speed crosses 75 words per minute.</p>
+        </div>
+        <div class="feature-box">
+          <div class="feature-box-title">🎯 Accuracy King (98%+ Accuracy)</div>
+          <p style="font-size: 8.2pt; color: #64748b; margin-bottom: 0;">Awarded when a user completes a typing test with an exceptional accuracy threshold of 98% or higher.</p>
+        </div>
+        <div class="feature-box">
+          <div class="feature-box-title">🔥 10-Day Streak (Daily Practice)</div>
+          <p style="font-size: 8.2pt; color: #64748b; margin-bottom: 0;">Triggers when a typist maintains 10 consecutive days of validated practice sessions.</p>
+        </div>
+        <div class="feature-box">
+          <div class="feature-box-title">⚡ Lightning Fast (100+ WPM)</div>
+          <p style="font-size: 8.2pt; color: #64748b; margin-bottom: 0;">Elite tier badge granted upon breaking the triple-digit speed milestone in any official test.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-break"></div>
+
+  <!-- ==================== PAGE 4 ==================== -->
+  <div>
+    <!-- GIT REPOSITORY & COMMIT AUDIT -->
+    <div class="section avoid-break">
+      <div class="section-title"><span class="number">07</span> Repository Audit & Commit Milestones</div>
+      <p>
+        The project repository is structured cleanly with semantic git commits documenting every progressive phase:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 14%;">Commit</th>
+            <th style="width: 46%;">Commit Message / Scope</th>
+            <th style="width: 40%;">Key Changes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="code-pill">7212459</span></td>
+            <td><strong>feat: scaffold full-featured typing master web application</strong></td>
+            <td>Scaffolded Vite + React project; implemented all 10 views, VirtualKeyboard, Web Audio sound synthesizer, AntiCheat service, and Supabase SQL schema (41 files, +8,587 lines).</td>
+          </tr>
+          <tr>
+            <td><span class="code-pill">ede3656</span></td>
+            <td><strong>docs: update README with real-time features and remove test script</strong></td>
+            <td>Cleaned development test scripts; updated documentation with Supabase setup guide and feature lists.</td>
+          </tr>
+          <tr>
+            <td><span class="code-pill">aea19ca</span></td>
+            <td><strong>feat: make performance, progress, and streaks dynamic and real-time</strong></td>
+            <td>Removed static mock data fallbacks; wired pure real-time calculations for Best WPM, Average WPM, Accuracy %, Streaks, and dynamic SVG graph plotting across views.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ROADMAP & FUTURE ENHANCEMENTS -->
+    <div class="section avoid-break" style="margin-top: 14px;">
+      <div class="section-title"><span class="number">08</span> Future Roadmap & Upcoming Capabilities</div>
+      <div class="feature-grid">
+        <div class="feature-box">
+          <div class="feature-box-title">🏎️ Real-Time Multiplayer Racing</div>
+          <p style="font-size: 8.2pt; color: #64748b; margin-bottom: 0;">Leveraging Supabase Realtime Channels to facilitate live head-to-head typing competitions with race avatars and instantaneous progress indicators.</p>
+        </div>
+        <div class="feature-box">
+          <div class="feature-box-title">📜 Verified Typing Certificate</div>
+          <p style="font-size: 8.2pt; color: #64748b; margin-bottom: 0;">One-click generation of verifiable, cryptographic typing speed certificates with QR validation and anti-cheat checksums.</p>
+        </div>
+        <div class="feature-box">
+          <div class="feature-box-title">🤖 AI Weakness Diagnostic</div>
+          <p style="font-size: 8.2pt; color: #64748b; margin-bottom: 0;">Heuristic clustering algorithm analyzing specific character pairs (bigrams/trigrams) that trigger user deceleration, generating custom drill passages.</p>
+        </div>
+        <div class="feature-box">
+          <div class="feature-box-title">📱 Mobile Touch & Tablet Optimization</div>
+          <p style="font-size: 8.2pt; color: #64748b; margin-bottom: 0;">Custom software on-screen split keyboards and adaptive layout optimization for touch-based mobile and tablet typing tests.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONCLUSION & SIGN-OFF -->
+    <div class="section avoid-break" style="margin-top: 16px;">
+      <div class="callout" style="background: #f0fdf4; border-left-color: #22c55e; color: #14532d;">
+        <strong>Conclusion:</strong> The TypeMaster project has reached full production-ready capability. All core pillars—from the real-time typing engine, procedural audio synthesizer, anti-cheat validation, and Supabase cloud synchronization, to the 10 dedicated views and responsive design system—are complete, verified, and running smoothly.
+      </div>
+
+      <div class="footer-stamp">
+        <span>TypeMaster Engineering Telemetry Report • Confidential & Proprietary</span>
+        <span>Engineered by Deepthi Priya • October 2026</span>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

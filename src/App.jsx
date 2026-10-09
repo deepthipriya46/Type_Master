@@ -17,9 +17,48 @@ import TestDetailModal from './components/TestDetailModal';
 import { supabaseService } from './services/supabaseService';
 
 export default function App() {
-  const [currentView, setCurrentView] = useState('dashboard');
+  // If no user is authenticated, start on login view
+  const [currentView, setCurrentView] = useState(() => {
+    return supabaseService.getCurrentUser() ? 'dashboard' : 'login';
+  });
+
   const [dashboardData, setDashboardData] = useState(null);
   const [supabaseConnected, setSupabaseConnected] = useState(supabaseService.isConfigured());
+
+  // Theme Management (Light, Dark, System)
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('typemaster_theme') || 'system';
+  });
+
+  useEffect(() => {
+    const applyTheme = (t) => {
+      document.documentElement.setAttribute('data-theme-setting', t);
+      if (t === 'dark') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      } else if (t === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+      } else {
+        // System Theme: dynamic OS tracking
+        const isSystemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.setAttribute('data-theme', isSystemDark ? 'system-dark' : 'system-light');
+      }
+    };
+
+    applyTheme(theme);
+    localStorage.setItem('typemaster_theme', theme);
+
+    if (theme === 'system' && window.matchMedia) {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const listener = () => applyTheme('system');
+      if (mediaQuery.addEventListener) {
+        mediaQuery.addEventListener('change', listener);
+        return () => mediaQuery.removeEventListener('change', listener);
+      } else if (mediaQuery.addListener) {
+        mediaQuery.addListener(listener);
+        return () => mediaQuery.removeListener(listener);
+      }
+    }
+  }, [theme]);
 
   // Test setup passing to TypingTestView
   const [testSettings, setTestSettings] = useState({
@@ -33,9 +72,14 @@ export default function App() {
   const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState(false);
   const [selectedTestDetail, setSelectedTestDetail] = useState(null);
 
-  // Fetch Dashboard Aggregation in Real-Time (Architecture Step 6)
+  // Fetch Dashboard Aggregation in Real-Time
   const refreshDashboard = useCallback(async () => {
     try {
+      const user = supabaseService.getCurrentUser();
+      if (!user) {
+        setDashboardData(null);
+        return;
+      }
       const data = await supabaseService.fetchDashboardData();
       setDashboardData(data);
       setSupabaseConnected(supabaseService.isConfigured());
@@ -61,38 +105,25 @@ export default function App() {
   };
 
   // Handle user authentication transitions
-  const handleLoginSuccess = (authUser) => {
-    refreshDashboard();
+  const handleLoginSuccess = async (authUser) => {
+    await refreshDashboard();
     setCurrentView('dashboard');
   };
 
   const handleSignOut = async () => {
     await supabaseService.signOut();
-    await supabaseService.signInGuest();
-    refreshDashboard();
-    setCurrentView('dashboard');
+    setDashboardData(null);
+    setCurrentView('login');
   };
 
-  if (!dashboardData) {
-    return (
-      <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', background: '#f4f7fc' }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#2563eb', marginBottom: '8px' }}>
-            TypeMaster
-          </div>
-          <p style={{ color: '#64748b', fontSize: '0.9rem' }}>Connecting real-time Supabase engine...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // If user navigated to login view, render the dedicated Login / Register screen
-  if (currentView === 'login') {
+  // If user navigated to login view or has not logged in, render the dedicated Login / Register screen
+  const currentUser = supabaseService.getCurrentUser();
+  if (currentView === 'login' || !currentUser) {
     return (
       <>
         <LoginView
           onLoginSuccess={handleLoginSuccess}
-          onCancel={() => setCurrentView('dashboard')}
+          onCancel={currentUser ? () => setCurrentView('dashboard') : null}
           onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
           supabaseConnected={supabaseConnected}
         />
@@ -108,12 +139,25 @@ export default function App() {
     );
   }
 
+  if (!dashboardData) {
+    return (
+      <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', background: '#f4f7fc' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#2563eb', marginBottom: '8px' }}>
+            TypeMaster
+          </div>
+          <p style={{ color: '#64748b', fontSize: '0.9rem' }}>Loading real-time user workspace...</p>
+        </div>
+      </div>
+    );
+  }
+
   const { user, streak, recentTests } = dashboardData;
   const isPremium = Boolean(user?.is_premium);
 
   return (
     <div className="app-layout">
-      {/* Left Sidebar matching Image 1 & 2 */}
+      {/* Left Sidebar */}
       <Sidebar
         currentView={currentView}
         setCurrentView={setCurrentView}
@@ -126,7 +170,7 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="app-main">
-        {/* Top Header matching Image 1 & 2 */}
+        {/* Top Header */}
         <TopHeader
           streak={streak?.current_streak || 0}
           user={user}
@@ -161,11 +205,16 @@ export default function App() {
             isPremium={isPremium}
             recentTests={recentTests}
             onOpenUpgradeModal={() => setIsUpgradeModalOpen(true)}
+            onNavigate={(view) => setCurrentView(view)}
           />
         )}
 
         {currentView === 'leaderboard' && (
-          <LeaderboardView user={user} streak={streak} />
+          <LeaderboardView
+            user={user}
+            streak={streak}
+            onNavigate={(view) => setCurrentView(view)}
+          />
         )}
 
         {currentView === 'progress' && (
@@ -177,7 +226,11 @@ export default function App() {
         )}
 
         {currentView === 'history' && (
-          <HistoryView recentTests={recentTests} />
+          <HistoryView
+            recentTests={recentTests}
+            onHistoryCleared={refreshDashboard}
+            onNavigate={(view) => setCurrentView(view)}
+          />
         )}
 
         {currentView === 'settings' && (
@@ -186,6 +239,8 @@ export default function App() {
             onUserUpdate={refreshDashboard}
             onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
             supabaseConnected={supabaseConnected}
+            theme={theme}
+            onThemeChange={setTheme}
           />
         )}
 

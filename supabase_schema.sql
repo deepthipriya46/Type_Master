@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS public.prompts (
     difficulty TEXT NOT NULL DEFAULT 'Easy',
     text TEXT NOT NULL,
     word_count INTEGER NOT NULL,
+    target_duration TEXT NOT NULL DEFAULT '1m', -- '1m', '3m', '5m', 'custom'
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

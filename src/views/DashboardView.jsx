@@ -30,16 +30,17 @@ export default function DashboardView({
   const [selectedDuration, setSelectedDuration] = useState('1 min');
   const [selectedDifficulty, setSelectedDifficulty] = useState('Easy');
 
-  const handleStartTestClick = () => {
+  const handleStartTestClick = (forceNew = false) => {
     let sec = 60;
     if (selectedDuration === '3 min') sec = 180;
     if (selectedDuration === '5 min') sec = 300;
-    if (selectedDuration === 'Custom') sec = 120;
+    if (selectedDuration === 'Custom') sec = 'custom';
 
     onStartTest({
       duration: sec,
       difficulty: selectedDifficulty,
-      category: 'Random Text'
+      category: 'Random Text',
+      forceNew
     });
   };
 
@@ -198,10 +199,35 @@ export default function DashboardView({
             </div>
           </div>
 
-          <button className="hero-cta-btn" onClick={handleStartTestClick}>
-            <Play size={18} fill="#2563eb" />
-            Start Typing Test
-          </button>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <button className="hero-cta-btn" onClick={() => handleStartTestClick(false)}>
+              <Play size={18} fill="#2563eb" />
+              Start Typing Test
+            </button>
+            <button
+              className="hero-secondary-btn"
+              onClick={() => handleStartTestClick(true)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 22px',
+                borderRadius: '12px',
+                background: 'rgba(255, 255, 255, 0.18)',
+                border: '1px solid rgba(255, 255, 255, 0.35)',
+                color: '#ffffff',
+                fontWeight: 700,
+                fontSize: '0.88rem',
+                cursor: 'pointer',
+                backdropFilter: 'blur(6px)',
+                transition: 'all 0.15s ease'
+              }}
+              title="Start test with a fresh randomized text prompt"
+            >
+              <Sparkles size={16} />
+              New Text
+            </button>
+          </div>
         </div>
 
         {/* 3D Character Illustration Area */}
@@ -307,6 +333,9 @@ export default function DashboardView({
                   let badgeClass = 'good';
                   if (test.result === 'Excellent') badgeClass = 'excellent';
                   if (test.result === 'Great') badgeClass = 'great';
+                  if (test.result === 'Fair' || test.result === 'Completed') badgeClass = 'fair';
+                  if (test.result === 'Needs Practice') badgeClass = 'needs-practice';
+                  if (test.result === 'Invalid' || test.result === 'Flagged') badgeClass = 'invalid';
 
                   return (
                     <tr key={test.id}>

@@ -5,6 +5,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { AntiCheatService } from './antiCheatService.js';
+import { getPassageForDuration } from '../utils/pdfTextLoader.js';
 
 // Real typing prompts for practice and testing
 // Real typing prompts for practice and testing across diverse categories & difficulties
@@ -934,6 +935,24 @@ class SupabaseService {
         }
       } catch (err) {
         console.warn('Supabase fetch prompt fallback:', err);
+      }
+    }
+
+    // Use parsed PDF word bank repository for dynamic Random Text passages
+    if (!category || category === 'Random Text' || category === 'All') {
+      const pdfText = getPassageForDuration(duration, excludeText);
+      if (pdfText) {
+        return {
+          success: true,
+          prompt: {
+            id: `pdf_prompt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            category: 'Random Text',
+            difficulty,
+            text: pdfText,
+            word_count: pdfText.split(/\s+/).length
+          },
+          source: 'pdf_repository'
+        };
       }
     }
 

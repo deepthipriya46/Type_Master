@@ -20,6 +20,7 @@ import confetti from 'canvas-confetti';
 import VirtualKeyboard from '../components/VirtualKeyboard';
 import { supabaseService } from '../services/supabaseService';
 import { soundSynth } from '../services/soundSynthesizer';
+import { getPassageForDuration } from '../utils/pdfTextLoader.js';
 
 export default function TypingTestView({
   initialSettings = {},
@@ -75,21 +76,79 @@ export default function TypingTestView({
   const charCountRef = useRef(0);
   const errorCountRef = useRef(0);
 
-  // Load Prompt from Backend with duration scaling and previous text exclusion
+  // Load Prompt from PDF Word Repository or specialized category
   const loadPrompt = useCallback(async (cat, diff, prevText = '', dur = duration) => {
+    // If Random Text or default, instantly grab passage from PDF word repository
+    if (!cat || cat === 'Random Text' || cat === 'All') {
+      const passage = getPassageForDuration(dur, prevText);
+      setPromptText(passage);
+      setPromptSource('pdf_repository');
+      return passage;
+    }
+
     setIsLoadingPrompt(true);
     try {
       const res = await supabaseService.fetchPrompt(cat, diff, prevText, dur);
-      if (res && res.prompt) {
+      if (res && res.prompt && res.prompt.text) {
         setPromptText(res.prompt.text);
         setPromptSource(res.source);
+      } else {
+        const passage = getPassageForDuration(dur, prevText);
+        setPromptText(passage);
+        setPromptSource('pdf_repository');
       }
     } catch (e) {
-      console.warn('Prompt load error:', e);
+      console.warn('Prompt load error, using PDF word repository fallback:', e);
+      const passage = getPassageForDuration(dur, prevText);
+      setPromptText(passage);
+      setPromptSource('pdf_repository');
     } finally {
       setIsLoadingPrompt(false);
     }
   }, [duration]);
+
+  // Complete Fix for "New Text" Button & Dynamic Text Slicing:
+  // Instantly slices a new random chunk from parsed PDF word bank according to active duration
+  // and completely resets typing engine state
+  const handleNewTextClick = useCallback(() => {
+    // 1. Instantly select a new random slice of text from parsed PDF word bank according to duration
+    const newPassage = getPassageForDuration(duration, promptText);
+    setPromptText(newPassage);
+    setPromptSource('pdf_repository');
+
+    // 2. Reset typing engine state completely:
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    setStatus('idle');
+    setTimeLeft(isCustomMode ? 0 : (typeof duration === 'number' ? duration : 60));
+    setElapsedSeconds(0);
+    setTypedInput('');
+    typedInputRef.current = '';
+    startTimeRef.current = null;
+    elapsedSecondsRef.current = 0;
+    charCountRef.current = 0;
+    errorCountRef.current = 0;
+
+    // Reset visual highlights on keyboard and errors
+    setLastPressedKey('');
+    setIsLastError(false);
+    setKeyFeedback(null);
+
+    // Reset live WPM, Accuracy, Errors, and Characters counters to 0
+    setLiveWpm(0);
+    setLiveAccuracy(100);
+    setCharCount(0);
+    setErrorCount(0);
+    latestMetricsRef.current = { wpm: 0, accuracy: 100 };
+    setLiveWpmHistory([0]);
+    setLiveAccHistory([100]);
+    keystrokesRef.current = [];
+    setResultModalData(null);
+
+    // Focus typing arena
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [duration, isCustomMode, promptText]);
 
   useEffect(() => {
     if (initialSettings.customPrompt) {
@@ -98,12 +157,18 @@ export default function TypingTestView({
       if (initialSettings.category) setCategory(initialSettings.category);
       if (initialSettings.difficulty) setDifficulty(initialSettings.difficulty);
     } else {
+      // Slices random text passage from PDF word bank for active duration
       loadPrompt(category, difficulty, '', duration);
     }
   }, [category, difficulty, duration, initialSettings.customPrompt, loadPrompt]);
 
-  // Reset test state and load fresh prompt
+  // Reset test state
   const resetTest = useCallback((fetchNew = false) => {
+    if (fetchNew) {
+      handleNewTextClick();
+      return;
+    }
+
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     setStatus('idle');
     setTimeLeft(isCustomMode ? 0 : (typeof duration === 'number' ? duration : 60));
@@ -126,13 +191,11 @@ export default function TypingTestView({
     setLiveAccHistory([100]);
     keystrokesRef.current = [];
     setResultModalData(null);
-    if (fetchNew) {
-      loadPrompt(category, difficulty, promptText, duration);
-    }
+
     if (inputRef.current) {
       inputRef.current.focus();
     }
-  }, [duration, isCustomMode, category, difficulty, promptText, loadPrompt]);
+  }, [duration, isCustomMode, handleNewTextClick]);
 
   useEffect(() => {
     resetTest(false);
@@ -389,11 +452,25 @@ export default function TypingTestView({
               className={`pill-btn ${duration === item.val ? 'active' : ''}`}
               onClick={() => {
                 setDuration(item.val);
-                setTimeLeft(item.val === 'custom' ? 0 : item.val);
+                const nextIsCustom = item.val === 'custom' || item.val === 0;
+                setTimeLeft(nextIsCustom ? 0 : item.val);
                 setStatus('idle');
                 setElapsedSeconds(0);
                 setTypedInput('');
-                loadPrompt(category, difficulty, promptText, item.val);
+                typedInputRef.current = '';
+                startTimeRef.current = null;
+                elapsedSecondsRef.current = 0;
+                charCountRef.current = 0;
+                errorCountRef.current = 0;
+                setLastPressedKey('');
+                setIsLastError(false);
+                setKeyFeedback(null);
+                setLiveWpm(0);
+                setLiveAccuracy(100);
+                const newPassage = getPassageForDuration(item.val, promptText);
+                setPromptText(newPassage);
+                setPromptSource('pdf_repository');
+                if (inputRef.current) inputRef.current.focus();
               }}
               style={duration === item.val ? { background: '#2563eb', color: '#ffffff' } : {}}
             >
@@ -451,7 +528,7 @@ export default function TypingTestView({
           </select>
 
           <button
-            onClick={() => resetTest(true)}
+            onClick={handleNewTextClick}
             disabled={isLoadingPrompt}
             style={{
               display: 'flex',
@@ -466,7 +543,7 @@ export default function TypingTestView({
               fontWeight: 700,
               cursor: 'pointer'
             }}
-            title="Load another typing prompt and reset test"
+            title="Load a new random text passage from the PDF word repository and reset test"
           >
             <Sparkles size={14} /> {isLoadingPrompt ? 'Loading...' : 'New Text'}
           </button>

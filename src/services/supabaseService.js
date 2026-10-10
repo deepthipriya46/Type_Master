@@ -390,11 +390,54 @@ class SupabaseService {
     this.ensureDefaultAdmin();
   }
 
+  getAuthorizedAdminEmails() {
+    const list = this._getLocal('authorized_admin_emails', ['admin@typemaster.com', 'paracademy@typemaster.com']);
+    if (!list.includes('admin@typemaster.com')) list.push('admin@typemaster.com');
+    if (!list.includes('paracademy@typemaster.com')) list.push('paracademy@typemaster.com');
+    return list;
+  }
+
+  isAuthorizedAdminEmail(email) {
+    if (!email) return false;
+    const clean = email.toLowerCase().trim();
+    const list = this.getAuthorizedAdminEmails().map(e => e.toLowerCase().trim());
+    return list.includes(clean);
+  }
+
+  addAuthorizedAdminEmail(email) {
+    if (!email) return;
+    const clean = email.toLowerCase().trim();
+    const list = this.getAuthorizedAdminEmails();
+    if (!list.map(e => e.toLowerCase()).includes(clean)) {
+      list.push(clean);
+      this._setLocal('authorized_admin_emails', list);
+    }
+  }
+
+  removeAuthorizedAdminEmail(email) {
+    if (!email) return;
+    const clean = email.toLowerCase().trim();
+    if (clean === 'admin@typemaster.com') return; // Cannot remove master admin
+    const list = this.getAuthorizedAdminEmails().filter(e => e.toLowerCase().trim() !== clean);
+    this._setLocal('authorized_admin_emails', list);
+  }
+
+  isAdmin(user = null) {
+    const target = user || this.getCurrentUser();
+    if (!target) return false;
+    if (target.role === 'admin') return true;
+    if (this.isAuthorizedAdminEmail(target.email)) return true;
+    return false;
+  }
+
   ensureDefaultAdmin() {
     try {
       const accounts = this._getLocal('users_registry', []);
-      const hasAdmin = accounts.some(a => a.role === 'admin' || a.email === 'admin@typemaster.com');
-      if (!hasAdmin) {
+      let updated = false;
+
+      // 1. Ensure master admin
+      const hasMasterAdmin = accounts.some(a => a.email === 'admin@typemaster.com');
+      if (!hasMasterAdmin) {
         accounts.push({
           id: 'admin_master_01',
           username: 'Admin Administrator',
@@ -412,16 +455,58 @@ class SupabaseService {
           is_premium: true,
           created_at: new Date().toISOString()
         });
+        updated = true;
+      }
+
+      // 2. Ensure paracademy admin exists and has role: 'admin'
+      const parAcc = accounts.find(a => a.email && a.email.toLowerCase() === 'paracademy@typemaster.com');
+      if (parAcc) {
+        if (parAcc.role !== 'admin') {
+          parAcc.role = 'admin';
+          updated = true;
+        }
+        if (!parAcc.password) {
+          parAcc.password = 'paracademy123';
+          updated = true;
+        }
+      } else {
+        accounts.push({
+          id: 'admin_paracademy_01',
+          username: 'PAR Academy Admin',
+          displayName: 'PAR Academy Admin',
+          display_name: 'PAR Academy Admin',
+          email: 'paracademy@typemaster.com',
+          password: 'paracademy123',
+          role: 'admin',
+          status: 'Active',
+          avatar_url: 'https://api.dicebear.com/7.x/initials/svg?seed=PARAcademy',
+          best_wpm: 0,
+          avg_wpm: 0,
+          accuracy: 0,
+          tests_completed: 0,
+          is_premium: true,
+          created_at: new Date().toISOString()
+        });
+        updated = true;
+      }
+
+      // 3. Ensure all authorized admin emails in registry have role: 'admin'
+      const authorizedEmails = this.getAuthorizedAdminEmails().map(e => e.toLowerCase().trim());
+      accounts.forEach(acc => {
+        if (acc.email && authorizedEmails.includes(acc.email.toLowerCase().trim())) {
+          if (acc.role !== 'admin') {
+            acc.role = 'admin';
+            updated = true;
+          }
+        }
+      });
+
+      if (updated) {
         this._setLocal('users_registry', accounts);
       }
     } catch {
       // Ignore
     }
-  }
-
-  isAdmin() {
-    const user = this.getCurrentUser();
-    return user?.role === 'admin' || user?.email === 'admin@typemaster.com';
   }
 
   // Detect and purge old mock dataset from previous session
@@ -873,14 +958,26 @@ class SupabaseService {
 
           const rawUsername = data.user.user_metadata?.username || profile?.username || profile?.display_name || 'Typist';
           const resolvedDisplayName = profile?.display_name || profile?.username || rawUsername;
+          const userEmail = (data.user.email || profile?.email || '').toLowerCase().trim();
+          const isUserAdmin = profile?.role === 'admin' || this.isAuthorizedAdminEmail(userEmail);
           const activeUser = {
             ...(profile || createFreshUser(data.user.id, rawUsername, data.user.email)),
             id: data.user.id,
             displayName: resolvedDisplayName,
             display_name: resolvedDisplayName,
             username: profile?.username || rawUsername,
-            email: data.user.email || profile?.email || ''
+            email: data.user.email || profile?.email || '',
+            role: isUserAdmin ? 'admin' : (profile?.role || 'user')
           };
+
+          // If recognized as admin, ensure profile role is admin
+          if (isUserAdmin && profile?.role !== 'admin') {
+            try {
+              await this.supabase.from('profiles').update({ role: 'admin' }).eq('id', data.user.id);
+            } catch (e) {
+              // ignore
+            }
+          }
 
           this.setCurrentUser(activeUser);
           return { success: true, user: activeUser };
@@ -904,16 +1001,15 @@ class SupabaseService {
       }
 
       const { password: _, ...safeUser } = userFound;
-      if (safeUser.email === 'admin@typemaster.com' || safeUser.username === 'Admin Administrator') {
-        safeUser.role = 'admin';
-      } else if (!safeUser.role) {
-        safeUser.role = 'user';
-      }
+      const userEmail = (safeUser.email || '').toLowerCase().trim();
+      const isUserAdmin = safeUser.role === 'admin' || this.isAuthorizedAdminEmail(userEmail);
+
       const resolvedName = safeUser.display_name || safeUser.username || 'Typist';
       const activeUser = {
         ...safeUser,
         displayName: resolvedName,
-        display_name: resolvedName
+        display_name: resolvedName,
+        role: isUserAdmin ? 'admin' : (safeUser.role || 'user')
       };
       this.setCurrentUser(activeUser);
       return { success: true, user: activeUser };
@@ -941,8 +1037,29 @@ class SupabaseService {
       return { success: true, user: masterAdmin };
     }
 
+    // 4. Built-in PAR Academy Admin fallback (paracademy@typemaster.com / paracademy123)
+    if ((input === 'paracademy@typemaster.com' || input === 'paracademy') && password === 'paracademy123') {
+      const parAdmin = {
+        id: 'admin_paracademy_01',
+        username: 'PAR Academy Admin',
+        displayName: 'PAR Academy Admin',
+        display_name: 'PAR Academy Admin',
+        email: 'paracademy@typemaster.com',
+        role: 'admin',
+        status: 'Active',
+        avatar_url: 'https://api.dicebear.com/7.x/initials/svg?seed=PARAcademy',
+        best_wpm: 0,
+        avg_wpm: 0,
+        accuracy: 0,
+        tests_completed: 0,
+        is_premium: true,
+        created_at: new Date().toISOString()
+      };
+      this.setCurrentUser(parAdmin);
+      return { success: true, user: parAdmin };
+    }
+
     return { success: false, message: 'Invalid credentials. Please verify your email/username and password.' };
-    return { success: true, user: activeUser };
   }
 
   async signInGuest(name = '') {
@@ -1029,6 +1146,374 @@ class SupabaseService {
     this.setCurrentUser(mockUser);
     sessionStorage.setItem('typemaster_session_authenticated', 'true');
     return { success: true, user: mockUser };
+  }
+
+  // ==========================================================
+  // MULTI-ADMIN CREATION & RBAC LIFECYCLE
+  // ==========================================================
+  async createAdminUser(email, password, displayName) {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const cleanName = (displayName || '').trim() || 'Administrator';
+
+    if (!cleanEmail || !password) {
+      return { success: false, message: 'Email and password are required.' };
+    }
+
+    // 1. Add to authorized admin registry
+    this.addAuthorizedAdminEmail(cleanEmail);
+
+    let createdUser = null;
+
+    // 2. If live Supabase configured, attempt to create/upsert via Supabase Auth & profiles
+    if (this.isConfigured()) {
+      try {
+        const { data, error } = await this._withTimeout(
+          this.supabase.auth.signUp({
+            email: cleanEmail,
+            password: password,
+            options: {
+              data: {
+                username: cleanName,
+                display_name: cleanName,
+                role: 'admin'
+              }
+            }
+          }),
+          5000
+        );
+
+        const userId = data?.user?.id || `admin_${Date.now()}`;
+
+        // Upsert into Supabase profiles with role = 'admin'
+        await this._withTimeout(
+          this.supabase.from('profiles').upsert({
+            id: userId,
+            username: cleanName,
+            display_name: cleanName,
+            email: cleanEmail,
+            avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanName)}`,
+            role: 'admin',
+            status: 'Active',
+            best_wpm: 0,
+            avg_wpm: 0,
+            accuracy: 0,
+            tests_completed: 0,
+            is_premium: true
+          }),
+          4000
+        );
+
+        // Also upsert users table
+        try {
+          await this._withTimeout(
+            this.supabase.from('users').upsert({
+              id: userId,
+              username: cleanName,
+              email: cleanEmail,
+              avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanName)}`,
+              role: 'admin',
+              is_premium: true
+            }),
+            3000
+          );
+        } catch (e) {
+          // ignore
+        }
+
+        createdUser = {
+          id: userId,
+          username: cleanName,
+          displayName: cleanName,
+          display_name: cleanName,
+          email: cleanEmail,
+          role: 'admin',
+          status: 'Active',
+          avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanName)}`,
+          best_wpm: 0,
+          avg_wpm: 0,
+          accuracy: 0,
+          tests_completed: 0,
+          is_premium: true,
+          created_at: new Date().toISOString()
+        };
+      } catch (err) {
+        console.warn('Supabase createAdminUser note:', err);
+      }
+    }
+
+    // 3. Update local users_registry
+    const accounts = this._getLocal('users_registry', []);
+    const existingIndex = accounts.findIndex(
+      a => a.email && a.email.toLowerCase() === cleanEmail
+    );
+
+    if (existingIndex >= 0) {
+      accounts[existingIndex].role = 'admin';
+      accounts[existingIndex].displayName = cleanName;
+      accounts[existingIndex].display_name = cleanName;
+      accounts[existingIndex].username = cleanName;
+      if (password) accounts[existingIndex].password = password;
+      createdUser = accounts[existingIndex];
+    } else {
+      const newAdmin = {
+        id: createdUser?.id || `admin_${Date.now()}`,
+        username: cleanName,
+        displayName: cleanName,
+        display_name: cleanName,
+        email: cleanEmail,
+        password: password,
+        role: 'admin',
+        status: 'Active',
+        avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanName)}`,
+        best_wpm: 0,
+        avg_wpm: 0,
+        accuracy: 0,
+        tests_completed: 0,
+        is_premium: true,
+        created_at: new Date().toISOString()
+      };
+      accounts.push(newAdmin);
+      createdUser = newAdmin;
+    }
+
+    this._setLocal('users_registry', accounts);
+    return { success: true, user: createdUser };
+  }
+
+  async revokeAdminUser(email) {
+    const cleanEmail = (email || '').toLowerCase().trim();
+    if (cleanEmail === 'admin@typemaster.com') {
+      return { success: false, message: 'Primary Master Admin cannot be revoked.' };
+    }
+    this.removeAuthorizedAdminEmail(cleanEmail);
+
+    // Update in Supabase
+    if (this.isConfigured()) {
+      try {
+        await this.supabase.from('profiles').update({ role: 'user' }).eq('email', cleanEmail);
+      } catch (e) {
+        console.warn('Revoke Supabase admin note:', e);
+      }
+    }
+
+    // Update in local registry
+    const accounts = this._getLocal('users_registry', []);
+    const acc = accounts.find(a => a.email && a.email.toLowerCase() === cleanEmail);
+    if (acc) {
+      acc.role = 'user';
+      this._setLocal('users_registry', accounts);
+    }
+    return { success: true };
+  }
+
+  // ==========================================================
+  // SYSTEM CONFIG & DYNAMIC GEMINI API CONFIGURATION
+  // ==========================================================
+  async getSystemConfig(key, defaultValue = null) {
+    // 1. Try Supabase system_config / system_settings if online
+    if (this.isConfigured()) {
+      try {
+        const { data, error } = await this._withTimeout(
+          this.supabase.from('system_config').select('*').eq('key', key).single(),
+          2500
+        );
+        if (!error && data?.value) {
+          return data.value;
+        }
+      } catch (e) {
+        // Fallback to system_settings
+        try {
+          const { data: sData } = await this._withTimeout(
+            this.supabase.from('system_settings').select('*').eq('key', key).single(),
+            2000
+          );
+          if (sData?.value) {
+            return typeof sData.value === 'string' ? sData.value : sData.value;
+          }
+        } catch {
+          // Ignore
+        }
+      }
+    }
+
+    // 2. Query localStorage fallback
+    const localVal = this._getLocal(`system_config_${key}`, null);
+    if (localVal !== null) return localVal;
+
+    const rawLocal = localStorage.getItem(key);
+    if (rawLocal !== null) return rawLocal;
+
+    return defaultValue;
+  }
+
+  async setSystemConfig(key, value) {
+    const stringVal = typeof value === 'object' ? JSON.stringify(value) : String(value || '');
+
+    // 1. Save to Supabase if configured
+    if (this.isConfigured()) {
+      try {
+        await this._withTimeout(
+          this.supabase.from('system_config').upsert({
+            key,
+            value: stringVal,
+            updated_at: new Date().toISOString()
+          }),
+          3000
+        );
+      } catch (e) {
+        try {
+          await this.supabase.from('system_settings').upsert({
+            key,
+            value: typeof value === 'object' ? value : { text: stringVal },
+            updated_at: new Date().toISOString()
+          });
+        } catch (err) {
+          console.warn('Supabase setSystemConfig note:', err);
+        }
+      }
+    }
+
+    // 2. Save to localStorage
+    this._setLocal(`system_config_${key}`, value);
+    localStorage.setItem(key, stringVal);
+    return true;
+  }
+
+  async getGeminiConfig() {
+    // Priority order:
+    // 1. Admin Configured Key from Supabase / system_config / localStorage
+    let apiKey = '';
+    let model = 'gemini-2.5-flash';
+
+    try {
+      const storedConfig = await this.getSystemConfig('gemini_config', null);
+      if (storedConfig) {
+        const parsed = typeof storedConfig === 'string' ? JSON.parse(storedConfig) : storedConfig;
+        if (parsed?.apiKey) apiKey = parsed.apiKey.trim();
+        if (parsed?.model) model = parsed.model;
+      }
+    } catch {
+      // Ignore
+    }
+
+    if (!apiKey) {
+      const directKey = await this.getSystemConfig('gemini_api_key', '');
+      if (directKey && typeof directKey === 'string') {
+        apiKey = directKey.trim();
+      }
+    }
+
+    if (!apiKey) {
+      apiKey = localStorage.getItem('gemini_api_key') || localStorage.getItem('VITE_GEMINI_API_KEY') || '';
+    }
+
+    // 2. Frontend environment variable fallback
+    if (!apiKey && typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) {
+      apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    }
+
+    return {
+      apiKey: apiKey || '',
+      model: model || 'gemini-2.5-flash',
+      isConfigured: Boolean(apiKey && apiKey.length > 8)
+    };
+  }
+
+  async saveGeminiConfig({ apiKey, model = 'gemini-2.5-flash' }) {
+    const cleanKey = (apiKey || '').trim();
+    const cleanModel = model || 'gemini-2.5-flash';
+
+    const configObj = {
+      apiKey: cleanKey,
+      model: cleanModel,
+      updated_at: new Date().toISOString()
+    };
+
+    await this.setSystemConfig('gemini_config', configObj);
+    await this.setSystemConfig('gemini_api_key', cleanKey);
+    await this.setSystemConfig('gemini_model', cleanModel);
+
+    localStorage.setItem('gemini_api_key', cleanKey);
+    localStorage.setItem('gemini_model', cleanModel);
+    localStorage.setItem('typemaster_gemini_config', JSON.stringify(configObj));
+
+    return { success: true, config: configObj };
+  }
+
+  async testGeminiConnection(apiKey, model = 'gemini-2.5-flash') {
+    const key = (apiKey || '').trim();
+    if (!key) {
+      return { success: false, message: 'API key is required to test connection.' };
+    }
+
+    // Try direct Gemini API request with lightweight test prompt
+    const candidateModels = [model, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+    let lastError = null;
+
+    for (const testModel of candidateModels) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${testModel}:generateContent?key=${key}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [{ text: 'Respond with the word "Connected" only.' }]
+              }
+            ],
+            generationConfig: {
+              maxOutputTokens: 10
+            }
+          }),
+          signal: AbortSignal.timeout(6000)
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          return {
+            success: true,
+            model: testModel,
+            message: `Connection Successful! API key is valid and connected to ${testModel}.`
+          };
+        } else {
+          const errData = await response.json().catch(() => ({}));
+          const errMsg = errData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+          lastError = errMsg;
+          // If invalid API key (400 / API_KEY_INVALID), return immediately
+          if (response.status === 400 && (errMsg.toLowerCase().includes('key') || errMsg.toLowerCase().includes('api_key'))) {
+            return {
+              success: false,
+              message: `Invalid API Key: ${errMsg}`
+            };
+          }
+        }
+      } catch (err) {
+        lastError = err.message || 'Network timeout';
+      }
+    }
+
+    // Also attempt server-side test endpoint as backup
+    try {
+      const serverRes = await fetch('/api/typing/test-gemini', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: key, model })
+      });
+      if (serverRes.ok) {
+        const serverData = await serverRes.json();
+        if (serverData.success) {
+          return { success: true, message: serverData.message || 'Connection Successful! API key is valid.' };
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
+    return {
+      success: false,
+      message: lastError ? `Connection Failed: ${lastError}` : 'Unable to connect to Google Gemini API. Please verify the API key.'
+    };
   }
 
   _initUserData(userId, userObj) {
@@ -1213,11 +1698,13 @@ class SupabaseService {
     const cleanEmail = (email || '').trim().toLowerCase();
     if (!cleanEmail) return { success: false, message: 'Please enter a valid email address.' };
 
+    sessionStorage.setItem('typemaster_recovery_email', cleanEmail);
+
     if (this.isConfigured()) {
       try {
         const { error } = await this._withTimeout(
           this.supabase.auth.resetPasswordForEmail(cleanEmail, {
-            redirectTo: window.location.origin
+            redirectTo: `${window.location.origin}/?type=recovery`
           }),
           6000
         );
@@ -1226,7 +1713,7 @@ class SupabaseService {
         }
         return {
           success: true,
-          message: 'Password reset link sent! Check your inbox to choose a new password.'
+          message: 'Password reset link sent! Check your email inbox to sign in and set your new password.'
         };
       } catch (err) {
         console.warn('Supabase reset password fallback:', err);
@@ -1242,8 +1729,121 @@ class SupabaseService {
 
     return {
       success: true,
-      message: `Password reset request registered for ${cleanEmail}! In local engine mode, you can change your password directly in Settings.`
+      message: `Password reset link sent for ${cleanEmail}! In local engine mode, click "Sign in with Email Link" to log in instantly and change your password in Settings.`
     };
+  }
+
+  async signInWithOtp(email) {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail) return { success: false, message: 'Please enter a valid email address.' };
+
+    sessionStorage.setItem('typemaster_recovery_email', cleanEmail);
+
+    if (this.isConfigured()) {
+      try {
+        const { error } = await this._withTimeout(
+          this.supabase.auth.signInWithOtp({
+            email: cleanEmail,
+            options: {
+              emailRedirectTo: `${window.location.origin}/?type=magiclink`
+            }
+          }),
+          6000
+        );
+        if (error) {
+          return { success: false, message: error.message };
+        }
+        return {
+          success: true,
+          message: 'One-click login link sent! Check your email inbox to log in instantly without a password.'
+        };
+      } catch (err) {
+        console.warn('Supabase signInWithOtp error:', err);
+      }
+    }
+
+    // Local fallback
+    const accounts = this._getLocal('users_registry', []);
+    const userFound = accounts.find(a => a.email && a.email.toLowerCase() === cleanEmail);
+    if (!userFound) {
+      return { success: false, message: 'No registered typist account found with that email address.' };
+    }
+
+    const mappedUser = {
+      ...userFound,
+      id: userFound.id,
+      displayName: userFound.displayName || userFound.username || 'Typist',
+      email: cleanEmail,
+      role: userFound.role || 'user'
+    };
+    this.setCurrentUser(mappedUser);
+    sessionStorage.setItem('typemaster_session_authenticated', 'true');
+    return {
+      success: true,
+      user: mappedUser,
+      message: `Signed in as ${cleanEmail}!`
+    };
+  }
+
+  async getRecoverySession() {
+    if (!this.isConfigured()) {
+      const recEmail = sessionStorage.getItem('typemaster_recovery_email');
+      if (recEmail) {
+        const accounts = this._getLocal('users_registry', []);
+        const u = accounts.find(a => a.email && a.email.toLowerCase() === recEmail.toLowerCase());
+        if (u) {
+          const mapped = {
+            ...u,
+            id: u.id,
+            displayName: u.displayName || u.username || 'Typist',
+            role: u.role || 'user'
+          };
+          this.setCurrentUser(mapped);
+          sessionStorage.setItem('typemaster_session_authenticated', 'true');
+          return mapped;
+        }
+      }
+      return null;
+    }
+
+    try {
+      // 1. Initial check
+      let { data: { session } } = await this.supabase.auth.getSession();
+
+      // 2. If session isn't populated yet, give Supabase auth a brief moment to finish parsing URL hash tokens
+      if (!session?.user) {
+        await new Promise(r => setTimeout(r, 450));
+        const res = await this.supabase.auth.getSession();
+        session = res.data?.session;
+      }
+
+      if (session?.user) {
+        let role = 'user';
+        let displayName = session.user.user_metadata?.username || session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Typist';
+        try {
+          const { data: prof } = await this.supabase.from('profiles').select('*').eq('id', session.user.id).single();
+          if (prof) {
+            displayName = prof.display_name || prof.username || displayName;
+            role = prof.role || 'user';
+          }
+        } catch (_) {}
+
+        const user = {
+          id: session.user.id,
+          email: session.user.email,
+          username: displayName,
+          displayName: displayName,
+          display_name: displayName,
+          role: this.isAuthorizedAdminEmail(session.user.email) ? 'admin' : role
+        };
+        this.setCurrentUser(user);
+        sessionStorage.setItem('typemaster_session_authenticated', 'true');
+        return user;
+      }
+    } catch (e) {
+      console.warn('getRecoverySession check note:', e);
+    }
+    return null;
   }
 
   async updatePassword(newPassword) {

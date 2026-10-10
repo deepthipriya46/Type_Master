@@ -12,7 +12,8 @@ import {
   X,
   Filter,
   Medal,
-  Users
+  Users,
+  FileSpreadsheet
 } from 'lucide-react';
 import { adminService } from '../../services/adminService';
 
@@ -81,6 +82,11 @@ export default function AdminAchievementsView() {
     setIsModalOpen(false);
   };
 
+  const handleExportAchievements = () => {
+    adminService.exportAchievementsToExcel(badges, rankings);
+    showToast('Leaderboard & Achievements exported to Excel (.xlsx)!');
+  };
+
   return (
     <div style={{ padding: '24px 32px', backgroundColor: '#F8FAFC', minHeight: 'calc(100vh - 70px)' }}>
       {/* Toast */}
@@ -128,28 +134,54 @@ export default function AdminAchievementsView() {
           </p>
         </div>
 
-        {activeTab === 'badges' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <button
-            onClick={handleOpenAddModal}
+            onClick={handleExportAchievements}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: '8px',
-              backgroundColor: '#4F46E5',
+              backgroundColor: '#10B981',
               color: '#FFFFFF',
               border: 'none',
-              padding: '9px 18px',
+              padding: '9px 16px',
               borderRadius: '10px',
               fontSize: '0.84rem',
               fontWeight: 700,
               cursor: 'pointer',
-              boxShadow: '0 2px 8px rgba(79, 70, 229, 0.3)'
+              boxShadow: '0 2px 8px rgba(16, 185, 129, 0.25)',
+              transition: 'background 0.15s'
             }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#059669')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#10B981')}
           >
-            <Plus size={16} />
-            <span>Create Badge</span>
+            <FileSpreadsheet size={16} />
+            <span>Export Achievements (.xlsx)</span>
           </button>
-        )}
+
+          {activeTab === 'badges' && (
+            <button
+              onClick={handleOpenAddModal}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                backgroundColor: '#4F46E5',
+                color: '#FFFFFF',
+                border: 'none',
+                padding: '9px 18px',
+                borderRadius: '10px',
+                fontSize: '0.84rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                boxShadow: '0 2px 8px rgba(79, 70, 229, 0.3)'
+              }}
+            >
+              <Plus size={16} />
+              <span>Create Badge</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Tabs */}

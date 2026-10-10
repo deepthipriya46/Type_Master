@@ -106,7 +106,9 @@ const server = http.createServer(async (req, res) => {
           difficulty,
           language: cleanLang,
           durationSeconds: Number(durationSeconds) || 60,
-          excludeText
+          excludeText,
+          apiKey: (body.apiKey || '').trim() || req.headers['x-gemini-api-key'] || '',
+          model: body.model || 'gemini-2.5-flash'
         });
 
         res.statusCode = 200;

@@ -11,13 +11,21 @@ import {
   Star,
   CheckCircle2,
   Clock,
-  RotateCw
+  RotateCw,
+  FileSpreadsheet
 } from 'lucide-react';
 import { adminService } from '../../services/adminService';
 import { supabaseService } from '../../services/supabaseService';
 
-export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytics }) {
+export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytics, dateRange = 'All Time', onDateRangeChange }) {
   const [loading, setLoading] = useState(true);
+  const [toastMsg, setToastMsg] = useState('');
+
+  const showToast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 3000);
+  };
+
   const [metrics, setMetrics] = useState({
     totalUsers: 0,
     activeUsers: 0,
@@ -35,17 +43,22 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
     recentFeedback: []
   });
 
+  const handleExportDashboard = () => {
+    adminService.exportDashboardToExcel(metrics);
+    showToast('Dashboard metrics exported to Excel (.xlsx)!');
+  };
+
   const loadLiveMetrics = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await adminService.getLiveDashboardMetrics();
+      const data = await adminService.getLiveDashboardMetrics(dateRange);
       setMetrics(data);
     } catch (err) {
       console.warn('Dashboard live query warning:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dateRange]);
 
   // Handlers for instant real-time telemetry updates
   const handleIncomingTest = useCallback((testPayload) => {
@@ -74,8 +87,8 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
       };
     });
     // Silent background sync
-    adminService.getLiveDashboardMetrics().then(data => setMetrics(data)).catch(() => {});
-  }, []);
+    adminService.getLiveDashboardMetrics(dateRange).then(data => setMetrics(data)).catch(() => {});
+  }, [dateRange]);
 
   const handleIncomingProfile = useCallback((profilePayload) => {
     if (!profilePayload) return;
@@ -99,8 +112,8 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
         recentUsers: [newUserRow, ...prev.recentUsers.slice(0, 4)]
       };
     });
-    adminService.getLiveDashboardMetrics().then(data => setMetrics(data)).catch(() => {});
-  }, []);
+    adminService.getLiveDashboardMetrics(dateRange).then(data => setMetrics(data)).catch(() => {});
+  }, [dateRange]);
 
   const handleIncomingFeedback = useCallback((fbPayload) => {
     if (!fbPayload) return;
@@ -219,6 +232,31 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
 
   return (
     <div style={{ padding: '24px 32px', backgroundColor: '#F8FAFC', minHeight: 'calc(100vh - 70px)' }}>
+      {/* Toast Notification */}
+      {toastMsg && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            background: '#0F172A',
+            color: '#FFFFFF',
+            padding: '12px 20px',
+            borderRadius: '10px',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
+            zIndex: 100,
+            fontSize: '0.86rem',
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}
+        >
+          <CheckCircle2 size={17} color="#10B981" />
+          {toastMsg}
+        </div>
+      )}
+
       {/* Page Title & Subtitle */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
         <div>
@@ -230,26 +268,50 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
           </p>
         </div>
 
-        <button
-          onClick={loadLiveMetrics}
-          title="Refresh Live Metrics"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            background: '#FFFFFF',
-            border: '1px solid #E2E8F0',
-            color: '#4F46E5',
-            padding: '7px 12px',
-            borderRadius: '9px',
-            fontSize: '0.8rem',
-            fontWeight: 700,
-            cursor: 'pointer'
-          }}
-        >
-          <RotateCw size={14} className={loading ? 'spin' : ''} />
-          <span>Refresh Data</span>
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <button
+            onClick={handleExportDashboard}
+            title="Export Dashboard to Excel"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: '#FFFFFF',
+              border: '1px solid #E2E8F0',
+              color: '#059669',
+              padding: '7px 14px',
+              borderRadius: '9px',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.03)'
+            }}
+          >
+            <FileSpreadsheet size={15} color="#059669" />
+            <span>Export Dashboard (.xlsx)</span>
+          </button>
+
+          <button
+            onClick={loadLiveMetrics}
+            title="Refresh Live Metrics"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: '#FFFFFF',
+              border: '1px solid #E2E8F0',
+              color: '#4F46E5',
+              padding: '7px 12px',
+              borderRadius: '9px',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              cursor: 'pointer'
+            }}
+          >
+            <RotateCw size={14} className={loading ? 'spin' : ''} />
+            <span>Refresh Data</span>
+          </button>
+        </div>
       </div>
 
       {/* 5 Key Metric Cards (Dynamic Live Database Values) */}

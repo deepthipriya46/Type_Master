@@ -319,13 +319,16 @@ export default function SettingsView({
             <form onSubmit={handleChangePassword}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Current Password</label>
+                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>Current Password</span>
+                    <span style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 600 }}>Optional</span>
+                  </label>
                   <input
                     type={showPassword ? 'text' : 'password'}
                     className="form-input"
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
-                    placeholder="••••••••"
+                    placeholder="Optional (not needed for reset)"
                   />
                 </div>
 

@@ -17,16 +17,37 @@ import {
   Crown,
   X
 } from 'lucide-react';
-import { adminService } from '../../services/adminService';
+import { adminService, isDateInPeriod } from '../../services/adminService';
 import { supabaseService } from '../../services/supabaseService';
 
-export default function AdminUsersView({ onSelectUserForAnalytics, onNavigate }) {
+export default function AdminUsersView({
+  onSelectUserForAnalytics,
+  onNavigate,
+  dateRange = 'All Time',
+  onDateRangeChange
+}) {
   const [users, setUsers] = useState(() => adminService.getUsers());
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
-  const [dateFilter, setDateFilter] = useState('All Time');
+  const [dateFilter, setDateFilter] = useState(() => dateRange || 'All Time');
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 8;
+
+  // Sync with top header reporting period
+  useEffect(() => {
+    if (dateRange && dateRange !== dateFilter) {
+      setDateFilter(dateRange);
+      setCurrentPage(1);
+    }
+  }, [dateRange]);
+
+  const handleDateFilterChange = (val) => {
+    setDateFilter(val);
+    setCurrentPage(1);
+    if (onDateRangeChange) {
+      onDateRangeChange(val);
+    }
+  };
 
   // Modals state
   const [selectedUserModal, setSelectedUserModal] = useState(null);
@@ -114,16 +135,20 @@ export default function AdminUsersView({ onSelectUserForAnalytics, onNavigate })
     showToast(`${u.name} tier set to ${nextTier ? 'Premium' : 'Standard'}! Instant sync sent to user.`);
   };
 
-  // Filtered & Searched Users
+  // Filtered & Searched Users (strictly respects date period, search and status)
   const filteredUsers = useMemo(() => {
     return users.filter((u) => {
       const matchSearch =
         u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         u.email.toLowerCase().includes(searchQuery.toLowerCase());
       const matchStatus = statusFilter === 'All' ? true : u.status === statusFilter;
-      return matchSearch && matchStatus;
+
+      const userDate = u.joinedOn || (u.created_at ? u.created_at.split('T')[0] : '');
+      const matchDate = isDateInPeriod(userDate, dateFilter);
+
+      return matchSearch && matchStatus && matchDate;
     });
-  }, [users, searchQuery, statusFilter]);
+  }, [users, searchQuery, statusFilter, dateFilter]);
 
   // Pagination calculation
   const totalPages = Math.max(1, Math.ceil(filteredUsers.length / pageSize));
@@ -153,8 +178,8 @@ export default function AdminUsersView({ onSelectUserForAnalytics, onNavigate })
   };
 
   const handleExportExcel = () => {
-    adminService.exportUsersToExcel();
-    showToast('Exported users directory to Excel (.xlsx)!');
+    adminService.exportUsersToExcel('xlsx', filteredUsers);
+    showToast(`Exported ${filteredUsers.length} user records to Excel (.xlsx)!`);
   };
 
   const handleAddUserSubmit = (e) => {
@@ -174,6 +199,7 @@ export default function AdminUsersView({ onSelectUserForAnalytics, onNavigate })
     setSearchQuery('');
     setStatusFilter('All');
     setDateFilter('All Time');
+    if (onDateRangeChange) onDateRangeChange('All Time');
     setCurrentPage(1);
   };
 
@@ -355,7 +381,7 @@ export default function AdminUsersView({ onSelectUserForAnalytics, onNavigate })
           {/* Date Filter */}
           <select
             value={dateFilter}
-            onChange={(e) => setDateFilter(e.target.value)}
+            onChange={(e) => handleDateFilterChange(e.target.value)}
             style={{
               padding: '7px 12px',
               borderRadius: '9px',
@@ -369,8 +395,10 @@ export default function AdminUsersView({ onSelectUserForAnalytics, onNavigate })
             }}
           >
             <option value="All Time">All Time</option>
+            <option value="Today">Today</option>
             <option value="Last 7 Days">Last 7 Days</option>
             <option value="Last 30 Days">Last 30 Days</option>
+            <option value="This Quarter">This Quarter</option>
           </select>
 
           {/* Reset Button */}
@@ -420,8 +448,35 @@ export default function AdminUsersView({ onSelectUserForAnalytics, onNavigate })
             <tbody>
               {paginatedUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={9} style={{ textAlign: 'center', padding: '36px', color: '#94A3B8' }}>
-                    No users found matching your search and filter criteria.
+                  <td colSpan={9} style={{ textAlign: 'center', padding: '48px 20px', color: '#64748B' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1E293B' }}>
+                        No users joined during {dateFilter}
+                      </div>
+                      <div style={{ fontSize: '0.82rem', color: '#64748B' }}>
+                        {dateFilter === 'Today'
+                          ? `No typists have registered today (${new Date().toLocaleDateString()}).`
+                          : 'No user accounts match the current filter selection.'}
+                      </div>
+                      {dateFilter !== 'All Time' && (
+                        <button
+                          onClick={() => handleDateFilterChange('All Time')}
+                          style={{
+                            marginTop: '8px',
+                            padding: '6px 14px',
+                            background: '#EEF2FF',
+                            color: '#4F46E5',
+                            border: '1px solid #C7D2FE',
+                            borderRadius: '8px',
+                            fontSize: '0.8rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          View All Users (All Time)
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ) : (

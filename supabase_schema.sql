@@ -66,10 +66,23 @@ ALTER TABLE public.feedback ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Pendin
 ALTER TABLE public.feedback ADD COLUMN IF NOT EXISTS admin_response TEXT;
 ALTER TABLE public.feedback ADD COLUMN IF NOT EXISTS attachment_url TEXT;
 
--- 4. SYSTEM SETTINGS TABLE (Global App Settings)
+-- 4. SYSTEM SETTINGS & SYSTEM CONFIG TABLES (Global App Settings & AI Credentials)
 CREATE TABLE IF NOT EXISTS public.system_settings (
   key TEXT PRIMARY KEY,
   value JSONB,
+  updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now())
+);
+
+CREATE TABLE IF NOT EXISTS public.system_config (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  config_json JSONB,
+  updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now())
+);
+
+CREATE TABLE IF NOT EXISTS public.app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now())
 );
 

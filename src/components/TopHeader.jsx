@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Search, Flame, Bell, Check, Database, ShieldCheck, Crown, LogIn, LogOut, User } from 'lucide-react';
+import { supabaseService } from '../services/supabaseService';
 
 export default function TopHeader({
   streak = 0,
@@ -18,7 +19,7 @@ export default function TopHeader({
   const [searchQuery, setSearchQuery] = useState('');
 
   // Admin Portal Toggle: ONLY visible if authenticated session has admin role
-  const isAdmin = Boolean(hasAdminPrivileges || authRole === 'admin' || user?.role === 'admin' || user?.email === 'admin@typemaster.com');
+  const isAdmin = Boolean(hasAdminPrivileges || authRole === 'admin' || user?.role === 'admin' || supabaseService.isAdmin(user));
 
   const notifications = [
     { id: 1, title: 'Real-Time Telemetry Active', desc: 'Supabase PostgreSQL connected for dynamic tracking', time: 'Just now' },

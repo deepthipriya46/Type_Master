@@ -14,19 +14,25 @@ import {
   Activity,
   Flame
 } from 'lucide-react';
-import { adminService } from '../../services/adminService';
+import { adminService, isDateInPeriod } from '../../services/adminService';
 import { supabaseService } from '../../services/supabaseService';
 
-export default function AdminPerformanceView({ initialUser }) {
+export default function AdminPerformanceView({ initialUser, dateRange = 'All Time', onDateRangeChange }) {
   const users = adminService.getUsers();
   const [selectedUserId, setSelectedUserId] = useState(() => {
     return initialUser?.id || (users[0] ? users[0].id : '');
   });
 
   const [activeTab, setActiveTab] = useState('overview'); // 'overview', 'history', 'practice', 'achievements'
-  const [timeRange, setTimeRange] = useState('Last 30 Days');
+  const [timeRange, setTimeRange] = useState(dateRange || 'All Time');
   const [toastMsg, setToastMsg] = useState('');
   const [userLogs, setUserLogs] = useState([]);
+
+  useEffect(() => {
+    if (dateRange) {
+      setTimeRange(dateRange);
+    }
+  }, [dateRange]);
 
   const currentUser = users.find((u) => u.id === selectedUserId) || users[0] || {
     id: 'empty',
@@ -63,8 +69,17 @@ export default function AdminPerformanceView({ initialUser }) {
     }
   };
 
+  const handleExportAll = () => {
+    adminService.exportPerformanceReport(timeRange, 'xlsx');
+    showToast('Platform performance report exported to Excel (.xlsx)!');
+  };
+
+  const filteredUserLogs = timeRange && timeRange !== 'All Time'
+    ? userLogs.filter(l => isDateInPeriod(l.created_at || l.date, timeRange))
+    : userLogs;
+
   // Dynamic progress history curve strictly from real test logs
-  const chronological = [...userLogs].reverse().slice(-7);
+  const chronological = [...filteredUserLogs].reverse().slice(-7);
   const speedHistory = chronological.length > 0
     ? chronological.map(l => ({
         date: l.created_at ? new Date(l.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : (l.date || 'Recent'),
@@ -79,7 +94,7 @@ export default function AdminPerformanceView({ initialUser }) {
       }))
     : [];
 
-  const testLogs = userLogs.map((l, idx) => ({
+  const testLogs = filteredUserLogs.map((l, idx) => ({
     id: idx + 1,
     title: l.category ? `${l.category} Session` : `Test Session #${idx + 1}`,
     type: l.category || 'General',
@@ -196,7 +211,7 @@ export default function AdminPerformanceView({ initialUser }) {
             </select>
           </div>
 
-          {/* Export to Excel */}
+          {/* Export Selected User to Excel */}
           <button
             onClick={handleExport}
             style={{
@@ -211,11 +226,39 @@ export default function AdminPerformanceView({ initialUser }) {
               fontSize: '0.84rem',
               fontWeight: 700,
               cursor: 'pointer',
-              boxShadow: '0 2px 8px rgba(16, 185, 129, 0.25)'
+              boxShadow: '0 2px 8px rgba(16, 185, 129, 0.25)',
+              transition: 'background 0.15s'
             }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#059669')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#10B981')}
           >
             <FileSpreadsheet size={16} />
             <span>Export User (.xlsx)</span>
+          </button>
+
+          {/* Export All Users to Excel */}
+          <button
+            onClick={handleExportAll}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              backgroundColor: '#4F46E5',
+              color: '#FFFFFF',
+              border: 'none',
+              padding: '9px 16px',
+              borderRadius: '10px',
+              fontSize: '0.84rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(79, 70, 229, 0.25)',
+              transition: 'background 0.15s'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#4338CA')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#4F46E5')}
+          >
+            <FileSpreadsheet size={16} />
+            <span>Export All Users (.xlsx)</span>
           </button>
         </div>
       </div>

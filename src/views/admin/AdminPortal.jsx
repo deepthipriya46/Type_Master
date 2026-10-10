@@ -66,6 +66,8 @@ export default function AdminPortal({
             <AdminDashboardView
               onNavigate={(view) => setCurrentAdminView(view)}
               onSelectUserForAnalytics={handleSelectUser}
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
             />
           )}
 
@@ -73,17 +75,24 @@ export default function AdminPortal({
             <AdminUsersView
               onSelectUserForAnalytics={handleSelectUser}
               onNavigate={(view) => setCurrentAdminView(view)}
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
             />
           )}
 
           {currentAdminView === 'performance' && (
             <AdminPerformanceView
               initialUser={selectedUserForAnalytics}
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
             />
           )}
 
           {currentAdminView === 'typing-tests' && (
-            <AdminTypingTestsView />
+            <AdminTypingTestsView
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+            />
           )}
 
           {currentAdminView === 'practice-content' && (
@@ -91,15 +100,24 @@ export default function AdminPortal({
           )}
 
           {currentAdminView === 'achievements' && (
-            <AdminAchievementsView />
+            <AdminAchievementsView
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+            />
           )}
 
           {currentAdminView === 'reports' && (
-            <AdminReportsView />
+            <AdminReportsView
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+            />
           )}
 
           {currentAdminView === 'feedback' && (
-            <AdminFeedbackView />
+            <AdminFeedbackView
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+            />
           )}
 
           {currentAdminView === 'announcements' && (

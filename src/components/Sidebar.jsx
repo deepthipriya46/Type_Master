@@ -1,4 +1,5 @@
 import React from 'react';
+import ParAcademyLogo from './ParAcademyLogo';
 import {
   LayoutDashboard,
   Keyboard,
@@ -40,15 +41,21 @@ export default function Sidebar({
 
   return (
     <aside className="app-sidebar">
-      {/* Top Logo */}
-      <div className="sidebar-logo">
-        <div className="sidebar-logo-icon">
-          <Keyboard size={24} />
-        </div>
-        <div className="sidebar-logo-text">
-          <h2>Typing Test</h2>
-          <p>Type Today, Better Tomorrow</p>
-        </div>
+      {/* Top Brand Logo (Matching Reference Screenshot) */}
+      <div
+        className="sidebar-logo"
+        style={{
+          padding: '8px 12px 24px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-start'
+        }}
+      >
+        <ParAcademyLogo
+          height={48}
+          style={{ cursor: 'pointer' }}
+          onClick={() => setCurrentView('dashboard')}
+        />
       </div>
 
       {/* Navigation Links */}

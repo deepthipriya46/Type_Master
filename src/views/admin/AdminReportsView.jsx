@@ -16,10 +16,21 @@ import {
 import { adminService } from '../../services/adminService';
 import { supabaseService } from '../../services/supabaseService';
 
-export default function AdminReportsView() {
-  const [timeRange, setTimeRange] = useState('Last 30 Days');
+export default function AdminReportsView({ dateRange, onDateRangeChange }) {
+  const [timeRange, setTimeRange] = useState(dateRange || 'Last 30 Days');
   const [toastMsg, setToastMsg] = useState('');
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (dateRange) {
+      setTimeRange(dateRange);
+    }
+  }, [dateRange]);
+
+  const handleTimeRangeChange = (val) => {
+    setTimeRange(val);
+    if (onDateRangeChange) onDateRangeChange(val);
+  };
 
   const [reportData, setReportData] = useState({
     totalTestsConducted: 0,
@@ -210,7 +221,7 @@ export default function AdminReportsView() {
           {/* Time range selector */}
           <select
             value={timeRange}
-            onChange={(e) => setTimeRange(e.target.value)}
+            onChange={(e) => handleTimeRangeChange(e.target.value)}
             style={{
               padding: '8px 14px',
               borderRadius: '10px',
@@ -224,10 +235,11 @@ export default function AdminReportsView() {
               boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
             }}
           >
+            <option value="Today">Today</option>
             <option value="Last 7 Days">Last 7 Days</option>
             <option value="Last 30 Days">Last 30 Days</option>
-            <option value="Last 90 Days">Last 90 Days</option>
-            <option value="Year to Date">Year to Date</option>
+            <option value="This Quarter">This Quarter</option>
+            <option value="All Time">All Time</option>
           </select>
 
           {/* Export Full Report (.xlsx) */}

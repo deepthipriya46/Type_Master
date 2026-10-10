@@ -1,4 +1,5 @@
 import React from 'react';
+import ParAcademyLogo from '../ParAcademyLogo';
 import {
   LayoutDashboard,
   Users,
@@ -65,30 +66,41 @@ export default function AdminSidebar({
           borderBottom: '1px solid #1E293B'
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
-          <div
-            style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #4F46E5, #6366F1)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#ffffff',
-              boxShadow: '0 4px 12px rgba(79, 70, 229, 0.35)',
-              flexShrink: 0
-            }}
-          >
-            <Keyboard size={22} />
-          </div>
-          {!collapsed && (
-            <div style={{ minWidth: 0, overflow: 'hidden' }}>
-              <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#FFFFFF', letterSpacing: '-0.3px', whiteSpace: 'nowrap' }}>
-                Typing Master
-              </div>
-              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#818CF8', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
-                Admin Portal
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+          {collapsed ? (
+            <ParAcademyLogo
+              height={36}
+              collapsed={true}
+              onClick={() => onNavigate('dashboard')}
+            />
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              <ParAcademyLogo
+                height={42}
+                style={{ cursor: 'pointer' }}
+                onClick={() => onNavigate('dashboard')}
+              />
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', paddingLeft: '2px' }}>
+                <span
+                  style={{
+                    fontSize: '0.64rem',
+                    fontWeight: 800,
+                    color: '#38BDF8',
+                    letterSpacing: '1px',
+                    textTransform: 'uppercase'
+                  }}
+                >
+                  ADMIN PORTAL
+                </span>
+                <span
+                  style={{
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    background: '#10B981',
+                    boxShadow: '0 0 0 2px rgba(16, 185, 129, 0.3)'
+                  }}
+                />
               </div>
             </div>
           )}

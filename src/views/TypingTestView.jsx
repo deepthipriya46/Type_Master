@@ -109,6 +109,8 @@ export default function TypingTestView({
       const targetSec = typeof dur === 'number' ? dur : 60;
 
       try {
+        const geminiConfig = await supabaseService.getGeminiConfig();
+
         const response = await fetch('/api/typing/generate-text', {
           method: 'POST',
           headers: {
@@ -119,7 +121,9 @@ export default function TypingTestView({
             difficulty: diff,
             language: cat === 'Programming' ? lang : undefined,
             durationSeconds: targetSec,
-            excludeText: exclude || promptText || ''
+            excludeText: exclude || promptText || '',
+            apiKey: geminiConfig?.apiKey || '',
+            model: geminiConfig?.model || 'gemini-2.5-flash'
           }),
           signal: controller.signal
         });

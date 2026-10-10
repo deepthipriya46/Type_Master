@@ -67,7 +67,7 @@ export function AuthProvider({ children }) {
         display_name: displayName,
         username: profileData.username || displayName,
         email: cleanEmail,
-        role: profileData.role || (cleanEmail === 'admin@typemaster.com' ? 'admin' : 'user'),
+        role: (profileData.role === 'admin' || supabaseService.isAuthorizedAdminEmail(cleanEmail)) ? 'admin' : (profileData.role || 'user'),
         is_premium: Boolean(profileData.is_premium),
         avatar_url: profileData.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName)}`
       };
@@ -93,11 +93,27 @@ export function AuthProvider({ children }) {
         return;
       }
 
+      const isRecovery = typeof window !== 'undefined' && (
+        window.location.hash.includes('type=recovery') ||
+        window.location.hash.includes('type=magiclink') ||
+        window.location.hash.includes('access_token') ||
+        window.location.search.includes('code=') ||
+        window.location.search.includes('type=recovery')
+      );
+      if (isRecovery) {
+        sessionStorage.setItem('typemaster_session_authenticated', 'true');
+        sessionStorage.setItem('typemaster_recovery_mode', 'true');
+      }
+
       if (supabaseService.isConfigured()) {
         try {
           // Check existing session
           const { data: { session } } = await supabaseService.supabase.auth.getSession();
           if (session?.user && isMounted) {
+            if (isRecovery) {
+              sessionStorage.setItem('typemaster_session_authenticated', 'true');
+              sessionStorage.setItem('typemaster_recovery_mode', 'true');
+            }
             await fetchExactProfile(session.user.id, session.user.email);
           }
         } catch (e) {
@@ -115,12 +131,22 @@ export function AuthProvider({ children }) {
               return;
             }
 
-            if (session?.user && (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED')) {
+            if (session?.user && (
+              event === 'SIGNED_IN' ||
+              event === 'USER_UPDATED' ||
+              event === 'TOKEN_REFRESHED' ||
+              event === 'PASSWORD_RECOVERY'
+            )) {
+              sessionStorage.setItem('typemaster_session_authenticated', 'true');
+              if (event === 'PASSWORD_RECOVERY' || (typeof window !== 'undefined' && window.location.hash.includes('type=recovery'))) {
+                sessionStorage.setItem('typemaster_recovery_mode', 'true');
+              }
               await fetchExactProfile(session.user.id, session.user.email);
             } else if (event === 'SIGNED_OUT') {
               setUser(null);
               supabaseService.setCurrentUser(null);
               sessionStorage.removeItem('typemaster_session_authenticated');
+              sessionStorage.removeItem('typemaster_recovery_mode');
               localStorage.removeItem('typemaster_active_portal');
             }
           }

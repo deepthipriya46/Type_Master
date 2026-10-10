@@ -12,9 +12,16 @@ import {
   Filter,
   UserPlus,
   Users,
-  AlertCircle
+  AlertCircle,
+  Sparkles,
+  Eye,
+  EyeOff,
+  Zap,
+  Save,
+  Bot
 } from 'lucide-react';
 import { adminService } from '../../services/adminService';
+import { supabaseService } from '../../services/supabaseService';
 
 export default function AdminSettingsView({ currentUser, onUserUpdate }) {
   const [adminName, setAdminName] = useState(currentUser?.username || 'Admin Administrator');
@@ -23,6 +30,15 @@ export default function AdminSettingsView({ currentUser, onUserUpdate }) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(true);
   const [sessionTimeout, setSessionTimeout] = useState('60');
+
+  // Gemini AI Text Generator Configuration State
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [geminiModel, setGeminiModel] = useState('gemini-2.5-flash');
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+  const [geminiStatus, setGeminiStatus] = useState('loading'); // 'active', 'unconfigured', 'loading'
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [savingGemini, setSavingGemini] = useState(false);
+  const [connectionTestResult, setConnectionTestResult] = useState(null); // { success: boolean, message: string }
 
   // Multi-Admin Management State
   const [newAdminEmail, setNewAdminEmail] = useState('');
@@ -34,6 +50,26 @@ export default function AdminSettingsView({ currentUser, onUserUpdate }) {
 
   useEffect(() => {
     setActiveAdmins(adminService.getActiveAdmins());
+
+    // Load current Gemini config from Supabase / localStorage
+    const loadGeminiConfig = async () => {
+      try {
+        const config = await supabaseService.getGeminiConfig();
+        if (config?.apiKey) {
+          setGeminiApiKey(config.apiKey);
+          setGeminiStatus('active');
+        } else {
+          setGeminiStatus('unconfigured');
+        }
+        if (config?.model) {
+          setGeminiModel(config.model);
+        }
+      } catch (err) {
+        console.warn('Gemini config load notice:', err);
+        setGeminiStatus('unconfigured');
+      }
+    };
+    loadGeminiConfig();
   }, []);
 
   const [auditLogs, setAuditLogs] = useState(() => adminService.getAuditLogs());
@@ -65,7 +101,7 @@ export default function AdminSettingsView({ currentUser, onUserUpdate }) {
         password: newAdminPassword
       });
       if (res.success) {
-        showToast(`Administrator ${newAdminDisplayName} created successfully!`);
+        showToast(`Administrator ${newAdminDisplayName} (${newAdminEmail}) provisioned successfully!`);
         setNewAdminEmail('');
         setNewAdminDisplayName('');
         setNewAdminPassword('');
@@ -78,6 +114,88 @@ export default function AdminSettingsView({ currentUser, onUserUpdate }) {
       setAdminError(err.message || 'An error occurred while creating administrator.');
     } finally {
       setCreatingAdmin(false);
+    }
+  };
+
+  const handleRevokeAdmin = async (email) => {
+    if (email === 'admin@typemaster.com') {
+      alert('Primary Master Admin cannot be revoked.');
+      return;
+    }
+    if (window.confirm(`Revoke administrator privileges for ${email}?`)) {
+      const res = await adminService.revokeAdministrator(email);
+      if (res.success) {
+        showToast(`Administrator privileges revoked for ${email}`);
+        setActiveAdmins(adminService.getActiveAdmins());
+        setAuditLogs(adminService.getAuditLogs());
+      } else {
+        alert(res.message || 'Failed to revoke administrator.');
+      }
+    }
+  };
+
+  const handleSaveGeminiConfig = async (e) => {
+    if (e) e.preventDefault();
+    setSavingGemini(true);
+    setConnectionTestResult(null);
+
+    try {
+      const cleanKey = geminiApiKey.trim();
+      await supabaseService.saveGeminiConfig({
+        apiKey: cleanKey,
+        model: geminiModel
+      });
+
+      adminService.logAudit(
+        'Gemini AI Configured',
+        'AI Engine',
+        cleanKey ? `Model: ${geminiModel} | Key: ...${cleanKey.slice(-4)}` : 'API Key Removed (Using Fallback)'
+      );
+      setAuditLogs(adminService.getAuditLogs());
+
+      if (cleanKey) {
+        setGeminiStatus('active');
+        showToast('Gemini API configuration saved successfully!');
+      } else {
+        setGeminiStatus('unconfigured');
+        showToast('Gemini API key cleared. Using local fallback passages.');
+      }
+    } catch (err) {
+      setConnectionTestResult({
+        success: false,
+        message: `Failed to save configuration: ${err.message}`
+      });
+    } finally {
+      setSavingGemini(false);
+    }
+  };
+
+  const handleTestGeminiConnection = async () => {
+    const cleanKey = geminiApiKey.trim();
+    if (!cleanKey) {
+      setConnectionTestResult({
+        success: false,
+        message: 'Please enter a Gemini API Key before testing the connection.'
+      });
+      return;
+    }
+
+    setTestingConnection(true);
+    setConnectionTestResult(null);
+
+    try {
+      const result = await supabaseService.testGeminiConnection(cleanKey, geminiModel);
+      setConnectionTestResult(result);
+      if (result.success) {
+        setGeminiStatus('active');
+      }
+    } catch (err) {
+      setConnectionTestResult({
+        success: false,
+        message: `Connection error: ${err.message}`
+      });
+    } finally {
+      setTestingConnection(false);
     }
   };
 
@@ -98,6 +216,16 @@ export default function AdminSettingsView({ currentUser, onUserUpdate }) {
     adminService.exportAuditLogsToExcel();
     setAuditLogs(adminService.getAuditLogs());
     showToast('Audit trail exported to Excel (.xlsx)!');
+  };
+
+  const handleExportSettings = () => {
+    adminService.exportSettingsToExcel({
+      twoFactor: twoFactorEnabled,
+      sessionTimeout,
+      geminiActive: Boolean(geminiApiKey.trim() || geminiStatus === 'active'),
+      geminiModel
+    });
+    showToast('System configuration & audit logs exported to Excel (.xlsx)!');
   };
 
   const filteredLogs = auditLogs.filter((l) => {
@@ -137,13 +265,48 @@ export default function AdminSettingsView({ currentUser, onUserUpdate }) {
       )}
 
       {/* Header */}
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '1.65rem', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.3px', margin: 0 }}>
-          Admin Settings & Audit Logs
-        </h1>
-        <p style={{ fontSize: '0.86rem', color: '#64748B', marginTop: '4px', marginBottom: 0 }}>
-          Manage administrative credentials, security parameters, and review system audit trails
-        </p>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '24px',
+          flexWrap: 'wrap',
+          gap: '12px'
+        }}
+      >
+        <div>
+          <h1 style={{ fontSize: '1.65rem', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.3px', margin: 0 }}>
+            Admin Settings & Audit Logs
+          </h1>
+          <p style={{ fontSize: '0.86rem', color: '#64748B', marginTop: '4px', marginBottom: 0 }}>
+            Manage administrative credentials, security parameters, and review system audit trails
+          </p>
+        </div>
+
+        <button
+          onClick={handleExportSettings}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            backgroundColor: '#10B981',
+            color: '#FFFFFF',
+            border: 'none',
+            padding: '9px 16px',
+            borderRadius: '10px',
+            fontSize: '0.84rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            boxShadow: '0 2px 8px rgba(16, 185, 129, 0.25)',
+            transition: 'background 0.15s'
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#059669')}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#10B981')}
+        >
+          <FileSpreadsheet size={16} />
+          <span>Export Settings & Admins (.xlsx)</span>
+        </button>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: '24px', marginBottom: '32px' }}>
@@ -279,6 +442,221 @@ export default function AdminSettingsView({ currentUser, onUserUpdate }) {
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* Card: Gemini AI Text Generator Configuration */}
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ ...iconBadgeStyle, background: '#F5F3FF', borderColor: '#DDD6FE' }}>
+                  <Sparkles size={18} color="#7C3AED" />
+                </div>
+                <div>
+                  <div style={{ fontSize: '1rem', fontWeight: 700, color: '#0F172A' }}>
+                    Gemini AI Text Generator Configuration
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: '#64748B' }}>
+                    Configure Google Gemini API key for dynamic typing test passages
+                  </div>
+                </div>
+              </div>
+
+              {/* Status Indicator Badge */}
+              <div>
+                {(geminiApiKey.trim() || geminiStatus === 'active') ? (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      background: '#ECFDF5',
+                      border: '1px solid #A7F3D0',
+                      color: '#065F46',
+                      padding: '4px 10px',
+                      borderRadius: '999px',
+                      fontSize: '0.72rem',
+                      fontWeight: 700
+                    }}
+                  >
+                    <CheckCircle2 size={12} color="#059669" />
+                    <span>Configured & Active</span>
+                  </span>
+                ) : (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      background: '#FFFBEB',
+                      border: '1px solid #FDE68A',
+                      color: '#B45309',
+                      padding: '4px 10px',
+                      borderRadius: '999px',
+                      fontSize: '0.72rem',
+                      fontWeight: 700
+                    }}
+                  >
+                    <AlertCircle size={12} color="#D97706" />
+                    <span>Not Configured - Using Local Fallback</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveGeminiConfig}>
+              {/* Gemini API Key Input Field */}
+              <div style={{ marginBottom: '14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                  <label style={{ ...labelStyle, marginBottom: 0 }}>Gemini API Key</label>
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      fontSize: '0.72rem',
+                      color: '#4F46E5',
+                      fontWeight: 600,
+                      textDecoration: 'none'
+                    }}
+                  >
+                    Get Free Key from Google AI Studio ↗
+                  </a>
+                </div>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={showGeminiKey ? 'text' : 'password'}
+                    placeholder="AIzaSy... (Enter your Google Gemini API Key)"
+                    value={geminiApiKey}
+                    onChange={(e) => {
+                      setGeminiApiKey(e.target.value);
+                      if (connectionTestResult) setConnectionTestResult(null);
+                    }}
+                    style={{ ...inputStyle, paddingRight: '40px' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowGeminiKey(!showGeminiKey)}
+                    style={{
+                      position: 'absolute',
+                      right: '10px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: '#94A3B8',
+                      cursor: 'pointer',
+                      padding: '4px',
+                      display: 'flex',
+                      alignItems: 'center'
+                    }}
+                    title={showGeminiKey ? 'Hide key' : 'Show key'}
+                  >
+                    {showGeminiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+                <div style={{ fontSize: '0.71rem', color: '#64748B', marginTop: '4px' }}>
+                  Persisted securely in Supabase system_config table (RLS admin-only) and active session.
+                </div>
+              </div>
+
+              {/* Model Selector Dropdown */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={labelStyle}>Select Gemini Model</label>
+                <select
+                  value={geminiModel}
+                  onChange={(e) => setGeminiModel(e.target.value)}
+                  style={{
+                    ...inputStyle,
+                    background: '#F8FAFC',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                    color: '#0F172A'
+                  }}
+                >
+                  <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended — Ultra-Fast & Precision)</option>
+                  <option value="gemini-2.5-pro">gemini-2.5-pro (Advanced Reasoning & Deep Knowledge)</option>
+                  <option value="gemini-2.0-flash">gemini-2.0-flash (Next-Gen High Speed Flash)</option>
+                  <option value="gemini-1.5-flash">gemini-1.5-flash (Standard Fast Generation)</option>
+                  <option value="gemini-1.5-pro">gemini-1.5-pro (Complex Content & Long Form)</option>
+                </select>
+              </div>
+
+              {/* Inline Connection Test Result Message */}
+              {connectionTestResult && (
+                <div
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    marginBottom: '16px',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '8px',
+                    background: connectionTestResult.success ? '#ECFDF5' : '#FEF2F2',
+                    border: `1px solid ${connectionTestResult.success ? '#A7F3D0' : '#FECACA'}`,
+                    color: connectionTestResult.success ? '#065F46' : '#DC2626'
+                  }}
+                >
+                  {connectionTestResult.success ? (
+                    <CheckCircle2 size={16} color="#059669" style={{ flexShrink: 0, marginTop: '1px' }} />
+                  ) : (
+                    <AlertCircle size={16} color="#DC2626" style={{ flexShrink: 0, marginTop: '1px' }} />
+                  )}
+                  <span style={{ lineHeight: 1.4 }}>{connectionTestResult.message}</span>
+                </div>
+              )}
+
+              {/* Action Buttons: Save API Key (Primary CTA) & Test Connection */}
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  type="submit"
+                  disabled={savingGemini}
+                  style={{
+                    flex: 1,
+                    padding: '9px 16px',
+                    borderRadius: '9px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #4F46E5, #3730A3)',
+                    color: '#FFFFFF',
+                    fontSize: '0.84rem',
+                    fontWeight: 700,
+                    cursor: savingGemini ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    boxShadow: '0 2px 6px rgba(79, 70, 229, 0.25)'
+                  }}
+                >
+                  <Save size={15} />
+                  <span>{savingGemini ? 'Saving Key...' : 'Save API Key'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTestGeminiConnection}
+                  disabled={testingConnection}
+                  style={{
+                    padding: '9px 16px',
+                    borderRadius: '9px',
+                    border: '1px solid #CBD5E1',
+                    background: '#FFFFFF',
+                    color: '#334155',
+                    fontSize: '0.84rem',
+                    fontWeight: 700,
+                    cursor: testingConnection ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    transition: 'all 0.15s'
+                  }}
+                >
+                  <Zap size={15} color="#D97706" />
+                  <span>{testingConnection ? 'Testing...' : 'Test Connection'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
 
@@ -520,12 +898,13 @@ export default function AdminSettingsView({ currentUser, onUserUpdate }) {
                     <th style={{ padding: '10px 12px' }}>Role</th>
                     <th style={{ padding: '10px 12px' }}>Status</th>
                     <th style={{ padding: '10px 12px' }}>Provisioned</th>
+                    <th style={{ padding: '10px 12px' }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {activeAdmins.length === 0 ? (
                     <tr>
-                      <td colSpan={5} style={{ padding: '24px', textAlign: 'center', color: '#94A3B8' }}>
+                      <td colSpan={6} style={{ padding: '24px', textAlign: 'center', color: '#94A3B8' }}>
                         No administrators registered.
                       </td>
                     </tr>
@@ -586,6 +965,30 @@ export default function AdminSettingsView({ currentUser, onUserUpdate }) {
                         </td>
                         <td style={{ padding: '10px 12px', color: '#94A3B8', fontSize: '0.74rem' }}>
                           {adm.joinedOn || '2026-10-10'}
+                        </td>
+                        <td style={{ padding: '10px 12px' }}>
+                          {adm.email === 'admin@typemaster.com' ? (
+                            <span style={{ color: '#94A3B8', fontSize: '0.72rem', fontStyle: 'italic' }}>
+                              Primary Admin
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleRevokeAdmin(adm.email)}
+                              style={{
+                                background: '#FEF2F2',
+                                border: '1px solid #FECACA',
+                                color: '#DC2626',
+                                borderRadius: '6px',
+                                padding: '3px 8px',
+                                fontSize: '0.72rem',
+                                fontWeight: 600,
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Revoke
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))

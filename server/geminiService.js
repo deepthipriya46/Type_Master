@@ -28,6 +28,11 @@ export const ALLOWED_LANGUAGES = ['C', 'Python', 'Java', 'JavaScript', 'C++'];
 
 // Supported Gemini models with automatic failover if any model hits quota/429
 const CANDIDATE_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-pro',
   process.env.GEMINI_MODEL || 'gemini-3.5-flash',
   'gemini-3.6-flash',
   'gemini-3-flash-preview',
@@ -716,11 +721,15 @@ STRICT CODE GENERATION RULES:
     ? `DO NOT reuse or repeat anything similar to this previous passage: "${excludeText.slice(0, 80)}..."`
     : 'Ensure this passage is completely unique and different from previous responses.';
 
-  return `You are a professional typing test passage generator.
+  const durationText = `${durationSeconds}s (${Math.max(1, Math.round(durationSeconds / 60))} min)`;
+
+  return `Generate a clear, high-legibility typing passage for a typing test. Duration target: ${durationText}, Difficulty: ${difficulty}, Category: ${category}. Return plain text only without markdown formatting.
+
+You are a professional typing test passage generator.
 Category: ${category}
 Difficulty: ${difficulty}
 Specific Topic Focus: ${subtopic}
-Target Length: Approximately ${targetWords} words.
+Target Length: Approximately ${targetWords} words (calibrated for ${durationText} typing session).
 Unique Entropy Seed: ${seed}
 
 Instructions:
@@ -815,12 +824,18 @@ export async function generateTextWithGemini({
   difficulty = 'Medium',
   language = 'C',
   durationSeconds = 60,
-  excludeText = ''
+  excludeText = '',
+  apiKey: clientApiKey = '',
+  model: clientModel = ''
 }) {
-  const apiKey = process.env.GEMINI_API_KEY || '';
+  // Key Priority Order:
+  // 1. Admin Configured Key from Supabase / system_config / client payload
+  // 2. Server Environment Variable (GEMINI_API_KEY)
+  // 3. Local Text Repository Fallback
+  const apiKey = (clientApiKey || '').trim() || process.env.GEMINI_API_KEY || '';
 
   if (!apiKey) {
-    console.warn('[GeminiService] GEMINI_API_KEY not configured. Serving rotating verified fallback.');
+    console.warn('[GeminiService] No Gemini API key provided. Serving rotating verified fallback.');
     const fallbackText = getFallbackPassage(category, difficulty, language, excludeText);
     return {
       success: true,
@@ -829,7 +844,7 @@ export async function generateTextWithGemini({
       language: category === 'Programming' ? language : undefined,
       text: fallbackText,
       source: 'fallback_bank',
-      notice: 'Server API key missing; serving rotating category bank.'
+      notice: 'Gemini API key not configured; using local verified category bank.'
     };
   }
 
@@ -851,8 +866,13 @@ export async function generateTextWithGemini({
     }
   };
 
+  // Determine models to try, placing chosen model first if provided
+  const activeCandidateModels = clientModel
+    ? [clientModel, ...CANDIDATE_MODELS.filter(m => m !== clientModel)]
+    : CANDIDATE_MODELS;
+
   // Try candidate models in order of availability
-  for (const model of CANDIDATE_MODELS) {
+  for (const model of activeCandidateModels) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
     try {

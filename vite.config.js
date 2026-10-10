@@ -11,8 +11,72 @@ import {
 // Custom server middleware plugin for Google Gemini text generation
 function geminiApiPlugin() {
   const handler = async (req, res) => {
-    // Only handle exact API endpoint
     const url = req.url?.split('?')[0];
+
+    // Handle test connection endpoint
+    if (url === '/api/typing/test-gemini') {
+      if (req.method !== 'POST') {
+        res.statusCode = 405;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ success: false, message: 'Method Not Allowed' }));
+        return true;
+      }
+
+      let rawBody = '';
+      req.on('data', (chunk) => { rawBody += chunk; });
+      req.on('end', async () => {
+        try {
+          const body = rawBody ? JSON.parse(rawBody) : {};
+          const apiKey = (body.apiKey || '').trim() || process.env.GEMINI_API_KEY || '';
+          const model = body.model || 'gemini-2.5-flash';
+
+          if (!apiKey) {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: false, message: 'API key is required.' }));
+            return;
+          }
+
+          const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+          const response = await fetch(testUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: 'Respond with "OK".' }] }],
+              generationConfig: { maxOutputTokens: 5 }
+            }),
+            signal: AbortSignal.timeout(6000)
+          });
+
+          if (response.ok) {
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({
+              success: true,
+              message: `Connection Successful! API key is valid and connected to ${model}.`
+            }));
+          } else {
+            const err = await response.json().catch(() => ({}));
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({
+              success: false,
+              message: err.error?.message || `HTTP ${response.status}: Failed to connect to Gemini API.`
+            }));
+          }
+        } catch (err) {
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({
+            success: false,
+            message: err.message || 'Connection test timed out.'
+          }));
+        }
+      });
+      return true;
+    }
+
+    // Only handle exact API endpoint
     if (url !== '/api/typing/generate-text') {
       return false;
     }
@@ -41,7 +105,6 @@ function geminiApiPlugin() {
     let rawBody = '';
     req.on('data', (chunk) => {
       rawBody += chunk;
-      // Prevent payload flooding
       if (rawBody.length > 50000) {
         req.destroy();
       }
@@ -55,7 +118,9 @@ function geminiApiPlugin() {
           difficulty = 'Medium',
           language = 'C',
           durationSeconds = 60,
-          excludeText = ''
+          excludeText = '',
+          apiKey = '',
+          model = ''
         } = body;
 
         // Validation
@@ -80,7 +145,9 @@ function geminiApiPlugin() {
           difficulty,
           language: cleanLang,
           durationSeconds: Number(durationSeconds) || 60,
-          excludeText
+          excludeText,
+          apiKey: (apiKey || '').trim() || req.headers['x-gemini-api-key'] || '',
+          model: model || 'gemini-2.5-flash'
         });
 
         res.statusCode = 200;

@@ -19,12 +19,13 @@ import {
   ExternalLink,
   ChevronRight,
   Send,
-  Check
+  Check,
+  FileSpreadsheet
 } from 'lucide-react';
-import { adminService } from '../../services/adminService';
+import { adminService, isDateInPeriod } from '../../services/adminService';
 import { supabaseService } from '../../services/supabaseService';
 
-export default function AdminFeedbackView() {
+export default function AdminFeedbackView({ dateRange = 'All Time', onDateRangeChange }) {
   const [feedback, setFeedback] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -135,9 +136,17 @@ export default function AdminFeedbackView() {
         if (filterRating === 'unrated' && r > 0) return false;
       }
 
+      // Date Range filter
+      if (dateRange && dateRange !== 'All Time') {
+        const itemDate = f.created_at || f.date;
+        if (!isDateInPeriod(itemDate, dateRange)) {
+          return false;
+        }
+      }
+
       return true;
     });
-  }, [feedback, searchQuery, filterCategory, filterStatus, filterRating]);
+  }, [feedback, searchQuery, filterCategory, filterStatus, filterRating, dateRange]);
 
   // Handle Quick Status Updates
   const handleQuickStatus = async (item, newStatus) => {
@@ -191,6 +200,16 @@ export default function AdminFeedbackView() {
         showToast('Error deleting feedback.');
       }
     }
+  };
+
+  const handleExportFeedback = () => {
+    const listToExport = filtered && filtered.length > 0 ? filtered : feedback;
+    if (!listToExport || listToExport.length === 0) {
+      showToast('No feedback records to export.');
+      return;
+    }
+    adminService.exportFeedbackToExcel(listToExport);
+    showToast('User feedback records exported to Excel (.xlsx)!');
   };
 
   // Category Badge Colors
@@ -314,28 +333,54 @@ export default function AdminFeedbackView() {
           </p>
         </div>
 
-        <button
-          onClick={() => loadLiveFeedback(true)}
-          disabled={isRefreshing}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '9px 16px',
-            borderRadius: '10px',
-            border: '1px solid #E2E8F0',
-            background: '#FFFFFF',
-            color: '#1E293B',
-            fontSize: '0.82rem',
-            fontWeight: 700,
-            cursor: 'pointer',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-            transition: 'all 0.15s'
-          }}
-        >
-          <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
-          {isRefreshing ? 'Syncing...' : 'Refresh Feed'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <button
+            onClick={handleExportFeedback}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '9px 16px',
+              borderRadius: '10px',
+              border: 'none',
+              background: '#10B981',
+              color: '#FFFFFF',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(16, 185, 129, 0.25)',
+              transition: 'background 0.15s'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#059669')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#10B981')}
+          >
+            <FileSpreadsheet size={15} />
+            <span>Export Feedback (.xlsx)</span>
+          </button>
+
+          <button
+            onClick={() => loadLiveFeedback(true)}
+            disabled={isRefreshing}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '9px 16px',
+              borderRadius: '10px',
+              border: '1px solid #E2E8F0',
+              background: '#FFFFFF',
+              color: '#1E293B',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              transition: 'all 0.15s'
+            }}
+          >
+            <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+            {isRefreshing ? 'Syncing...' : 'Refresh Feed'}
+          </button>
+        </div>
       </div>
 
       {/* Real-time Statistics Cards */}

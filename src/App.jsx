@@ -18,9 +18,25 @@ import SupabaseModal from './components/SupabaseModal';
 import PremiumModal from './components/PremiumModal';
 import TestDetailModal from './components/TestDetailModal';
 import ReviewMistakesView from './views/ReviewMistakesView';
+import PasswordResetModal from './components/PasswordResetModal';
 import { supabaseService } from './services/supabaseService';
 import { useAuth } from './context/AuthContext';
 import { X } from 'lucide-react';
+
+const isRecoveryUrlFlow = () => {
+  if (typeof window === 'undefined') return false;
+  const hash = window.location.hash || '';
+  const search = window.location.search || '';
+  return (
+    hash.includes('type=recovery') ||
+    hash.includes('type=magiclink') ||
+    hash.includes('access_token') ||
+    search.includes('type=recovery') ||
+    search.includes('type=magiclink') ||
+    search.includes('code=') ||
+    sessionStorage.getItem('typemaster_recovery_mode') === 'true'
+  );
+};
 
 export default function App() {
   const authContext = useAuth ? useAuth() : null;
@@ -28,8 +44,12 @@ export default function App() {
   const authContextLogout = authContext?.logout;
   const refreshProfile = authContext?.refreshProfile;
 
-  // Session Authentication State (Enforces Login First on initial visit)
+  // Session Authentication State (Enforces Login First on initial visit unless recovery link)
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    if (isRecoveryUrlFlow()) {
+      sessionStorage.setItem('typemaster_session_authenticated', 'true');
+      return true;
+    }
     const isAuthedSession = sessionStorage.getItem('typemaster_session_authenticated') === 'true';
     const cu = supabaseService.getCurrentUser();
     // Mandatory Initial Route: Visiting '/' or localhost:5173 initially ALWAYS requires Login
@@ -39,10 +59,12 @@ export default function App() {
     return true;
   });
 
+  const [showPasswordResetModal, setShowPasswordResetModal] = useState(() => isRecoveryUrlFlow());
+
   // Current authenticated user session (stores admin or regular user account)
   const [authUser, setAuthUser] = useState(() => {
     const isAuthedSession = sessionStorage.getItem('typemaster_session_authenticated') === 'true';
-    if (!isAuthedSession) return null;
+    if (!isAuthedSession && !isRecoveryUrlFlow()) return null;
     return supabaseService.getCurrentUser();
   });
 
@@ -72,7 +94,7 @@ export default function App() {
     const saved = localStorage.getItem('typemaster_active_portal');
     const u = supabaseService.getCurrentUser();
     const path = window.location.pathname.replace(/^\//, '');
-    const isAdminUser = u?.role === 'admin' || u?.email === 'admin@typemaster.com';
+    const isAdminUser = u?.role === 'admin' || supabaseService.isAdmin(u);
     if ((saved === 'admin' || path === 'admin' || path.startsWith('admin/')) && isAdminUser) {
       return 'admin';
     }
@@ -81,6 +103,9 @@ export default function App() {
 
   // Active View Router
   const [currentView, setCurrentView] = useState(() => {
+    if (isRecoveryUrlFlow()) {
+      return 'settings';
+    }
     const isAuthedSession = sessionStorage.getItem('typemaster_session_authenticated') === 'true';
     if (!isAuthedSession || !supabaseService.getCurrentUser()) {
       return 'login';
@@ -102,6 +127,28 @@ export default function App() {
   const [dashboardData, setDashboardData] = useState(null);
   const [supabaseConnected, setSupabaseConnected] = useState(supabaseService.isConfigured());
   const [showAccessDeniedModal, setShowAccessDeniedModal] = useState(false);
+
+  // Automatic Recovery & Magic Link Session Resolution
+  useEffect(() => {
+    if (isRecoveryUrlFlow()) {
+      sessionStorage.setItem('typemaster_session_authenticated', 'true');
+      sessionStorage.setItem('typemaster_recovery_mode', 'true');
+      setIsAuthenticated(true);
+      setShowPasswordResetModal(true);
+
+      const resolveSession = async () => {
+        const u = await supabaseService.getRecoverySession();
+        if (u) {
+          setAuthUser(u);
+          if (authContext?.setUser) {
+            authContext.setUser(u);
+          }
+          await refreshDashboard();
+        }
+      };
+      resolveSession();
+    }
+  }, []);
 
   // Theme Management (Light, Dark, System)
   const [theme, setTheme] = useState(() => {
@@ -139,6 +186,11 @@ export default function App() {
 
   // Auth Guard & URL Synchronization on Mount and Updates
   useEffect(() => {
+    // If arriving from email recovery or magic link, do NOT wipe tokens or force /login
+    if (isRecoveryUrlFlow()) {
+      return;
+    }
+
     // 1. If not authenticated, enforce redirect to /login
     if (!isAuthenticated) {
       if (window.location.pathname !== '/login') {
@@ -150,7 +202,7 @@ export default function App() {
 
     const path = window.location.pathname.replace(/^\//, '');
     const activeU = authUser || effectiveUser || supabaseService.getCurrentUser();
-    const isAdmin = activeU?.role === 'admin' || activeU?.email === 'admin@typemaster.com';
+    const isAdmin = activeU?.role === 'admin' || supabaseService.isAdmin(activeU);
 
     // 2. If visiting /admin as an admin, ensure portal is set to admin
     if (path === 'admin' || path.startsWith('admin/')) {
@@ -193,7 +245,7 @@ export default function App() {
       if (path === 'login') {
         setCurrentView('login');
       } else if (path === 'admin' || path.startsWith('admin/')) {
-        const isAllowedAdmin = authUser?.role === 'admin' || authUser?.email === 'admin@typemaster.com';
+        const isAllowedAdmin = authUser?.role === 'admin' || supabaseService.isAdmin(authUser);
         if (!isAllowedAdmin) {
           setShowAccessDeniedModal(true);
           window.history.replaceState(null, '', '/dashboard');
@@ -239,7 +291,7 @@ export default function App() {
 
     // Strict Role Authorization Middleware for Admin
     if (nextPortal === 'admin' || view === 'admin' || view.startsWith('admin/')) {
-      const isAllowedAdmin = authUser?.role === 'admin' || authUser?.email === 'admin@typemaster.com';
+      const isAllowedAdmin = authUser?.role === 'admin' || supabaseService.isAdmin(authUser);
       if (!isAllowedAdmin) {
         setShowAccessDeniedModal(true);
         return;
@@ -333,7 +385,7 @@ export default function App() {
       authContext.setUser(authenticatedUser);
     }
 
-    const isAdmin = authenticatedUser.role === 'admin' || authenticatedUser.email === 'admin@typemaster.com';
+    const isAdmin = authenticatedUser?.role === 'admin' || supabaseService.isAdmin(authenticatedUser);
 
     if (targetPortal === 'admin' && isAdmin) {
       setPortal('admin');
@@ -369,7 +421,7 @@ export default function App() {
   // ==========================================================
   // 1. AUTH GUARD: MANDATORY INITIAL ROUTE TO LOGIN VIEW
   // ==========================================================
-  if (!isAuthenticated || currentView === 'login') {
+  if ((!isAuthenticated || currentView === 'login') && !isRecoveryUrlFlow()) {
     const isTargetingAdmin = window.location.pathname.startsWith('/admin') || portal === 'admin' || localStorage.getItem('typemaster_active_portal') === 'admin';
     return (
       <>
@@ -379,6 +431,12 @@ export default function App() {
           onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
           supabaseConnected={supabaseConnected}
           initialPortal={isTargetingAdmin ? 'admin' : portal}
+        />
+        <PasswordResetModal
+          isOpen={showPasswordResetModal}
+          onClose={() => setShowPasswordResetModal(false)}
+          userEmail={effectiveUser?.email}
+          onSuccess={() => navigateTo('dashboard')}
         />
         <SupabaseModal
           isOpen={isSupabaseModalOpen}
@@ -397,7 +455,7 @@ export default function App() {
   // Strict Role Authorization Enforced
   // ==========================================================
   const activeAdminUser = authUser || effectiveUser || supabaseService.getCurrentUser();
-  const isAllowedAdmin = activeAdminUser?.role === 'admin' || activeAdminUser?.email === 'admin@typemaster.com';
+  const isAllowedAdmin = activeAdminUser?.role === 'admin' || supabaseService.isAdmin(activeAdminUser);
 
   if (portal === 'admin' || (currentView === 'admin' && isAllowedAdmin)) {
     if (!isAllowedAdmin) {
@@ -442,7 +500,7 @@ export default function App() {
   // ==========================================================
   const displayedUser = activeTypistUser;
   const isPremium = Boolean(displayedUser?.is_premium);
-  const hasAdminPrivileges = authUser?.role === 'admin' || authUser?.email === 'admin@typemaster.com';
+  const hasAdminPrivileges = authUser?.role === 'admin' || supabaseService.isAdmin(authUser);
 
   return (
     <div className="app-layout">
@@ -577,6 +635,14 @@ export default function App() {
           setSupabaseConnected(connected);
           refreshDashboard();
         }}
+      />
+
+      {/* Account Password Reset Modal */}
+      <PasswordResetModal
+        isOpen={showPasswordResetModal}
+        onClose={() => setShowPasswordResetModal(false)}
+        userEmail={displayedUser?.email || effectiveUser?.email}
+        onSuccess={() => navigateTo('dashboard')}
       />
 
       {/* Upgrade to Premium Modal */}

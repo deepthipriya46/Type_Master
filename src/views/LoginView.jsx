@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { supabaseService } from '../services/supabaseService';
 import keyboardHeroImg from '../assets/keyboard_hero.jpg';
+import ParAcademyLogo from '../components/ParAcademyLogo';
 
 export default function LoginView({
   onLoginSuccess,
@@ -33,6 +34,7 @@ export default function LoginView({
   // Navigation & Mode States
   const [isAdminMode, setIsAdminMode] = useState(initialPortal === 'admin');
   const [activeTab, setActiveTab] = useState('signin'); // 'signin', 'register', 'guest', 'forgot'
+  const [loginMethod, setLoginMethod] = useState('password'); // 'password' | 'magiclink'
 
   // Input states
   const [email, setEmail] = useState('');
@@ -47,6 +49,38 @@ export default function LoginView({
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+
+  // Auto-detect recovery tokens or magic links on mount
+  useEffect(() => {
+    const checkEmailTokens = async () => {
+      const hash = window.location.hash || '';
+      const search = window.location.search || '';
+      const hasTokens =
+        hash.includes('type=recovery') ||
+        hash.includes('type=magiclink') ||
+        hash.includes('access_token') ||
+        search.includes('type=recovery') ||
+        search.includes('type=magiclink') ||
+        search.includes('code=') ||
+        sessionStorage.getItem('typemaster_recovery_mode') === 'true';
+
+      if (hasTokens) {
+        setLoading(true);
+        setSuccessMsg('Authenticating from your email link...');
+        try {
+          const user = await supabaseService.getRecoverySession();
+          if (user) {
+            onLoginSuccess(user, user.role || 'user');
+          }
+        } catch (e) {
+          console.warn('LoginView token check note:', e);
+        } finally {
+          setLoading(false);
+        }
+      }
+    };
+    checkEmailTokens();
+  }, [onLoginSuccess]);
 
   // Sync initialPortal prop if changed
   useEffect(() => {
@@ -92,12 +126,13 @@ export default function LoginView({
       if (res.success && res.user) {
         if (isAdminMode) {
           // Strict Role Authorization Check
-          const isAdmin = res.user.role === 'admin' || res.user.email === 'admin@typemaster.com';
+          const isAdmin = res.user.role === 'admin' || supabaseService.isAdmin(res.user);
           if (!isAdmin) {
             await supabaseService.signOut();
             setErrorMsg('Access Denied: Account lacks Administrator privileges. Only authorized administrators can access this portal.');
             return;
           }
+          res.user.role = 'admin';
           onLoginSuccess(res.user, 'admin');
         } else {
           onLoginSuccess(res.user, 'user');
@@ -203,6 +238,34 @@ export default function LoginView({
     }
   };
 
+  // One-Click Email Login Link (Passwordless)
+  const handleMagicLinkSignIn = async (e) => {
+    if (e) e.preventDefault();
+    if (!email.trim()) {
+      setErrorMsg('Please enter your email address to receive your one-click sign-in link.');
+      return;
+    }
+    setErrorMsg('');
+    setSuccessMsg('');
+    setLoading(true);
+    try {
+      const res = await supabaseService.signInWithOtp(email.trim());
+      if (res.success) {
+        if (res.user) {
+          onLoginSuccess(res.user, 'user');
+        } else {
+          setSuccessMsg(res.message || 'One-click login link sent to your email! Click the link in your email to sign in instantly without a password.');
+        }
+      } else {
+        setErrorMsg(res.message || 'Failed to send login link.');
+      }
+    } catch (err) {
+      setErrorMsg(err.message || 'Could not send login link.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -259,24 +322,25 @@ export default function LoginView({
           }}
         />
 
-        {/* Faint Background Watermark Logo */}
+        {/* Faint Background Watermark Logo (Matching Design Screenshot) */}
         <div
           style={{
             position: 'absolute',
-            top: '15%',
-            left: '25%',
-            fontSize: '7.5rem',
-            fontWeight: 900,
-            letterSpacing: '8px',
-            color: 'rgba(255, 255, 255, 0.02)',
+            top: '12%',
+            left: '22%',
+            width: '480px',
+            opacity: 0.04,
             userSelect: 'none',
             pointerEvents: 'none',
-            lineHeight: 1,
-            zIndex: 1
+            zIndex: 1,
+            filter: 'brightness(2)'
           }}
         >
-          PAR
-          <div style={{ fontSize: '2.5rem', letterSpacing: '14px', marginTop: '10px' }}>ACADEMY</div>
+          <img
+            src="/par_academy_logo.png"
+            alt=""
+            style={{ width: '100%', height: 'auto', display: 'block' }}
+          />
         </div>
 
         {/* Top Header: PAR ACADEMY Brand & Tagline */}
@@ -290,48 +354,10 @@ export default function LoginView({
           }}
         >
           {/* Logo */}
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-              <span
-                style={{
-                  fontSize: '2.3rem',
-                  fontWeight: 900,
-                  letterSpacing: '2px',
-                  background: 'linear-gradient(90deg, #00E5FF 0%, #3B82F6 100%)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  lineHeight: 1
-                }}
-              >
-                PAR
-              </span>
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                marginTop: '4px'
-              }}
-            >
-              <div style={{ width: '16px', height: '2px', background: 'rgba(148, 163, 184, 0.6)' }} />
-              <span
-                style={{
-                  fontSize: '0.66rem',
-                  fontWeight: 800,
-                  letterSpacing: '4px',
-                  color: '#94A3B8',
-                  textTransform: 'uppercase'
-                }}
-              >
-                ACADEMY
-              </span>
-              <div style={{ width: '16px', height: '2px', background: 'rgba(148, 163, 184, 0.6)' }} />
-            </div>
-          </div>
+          <ParAcademyLogo height={52} />
 
           {/* Tagline */}
-          <div style={{ textAlign: 'right' }}>
+          <div style={{ textAlign: 'right', marginTop: '4px' }}>
             <div style={{ color: '#E2E8F0', fontSize: '0.86rem', fontWeight: 600 }}>Type Today,</div>
             <div style={{ color: '#94A3B8', fontSize: '0.82rem', fontWeight: 500 }}>A Better Tomorrow.</div>
           </div>
@@ -884,121 +910,282 @@ export default function LoginView({
           {/* TAB 1: SIGN IN (DEFAULT & ADMIN MODE) */}
           {/* ========================================================= */}
           {activeTab === 'signin' && (
-            <form onSubmit={handleSignIn} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Email Address */}
-              <div>
-                <label style={labelStyle}>
-                  {isAdminMode ? 'Admin Email Address' : 'Email Address'}
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <Mail
-                    size={17}
-                    color="#94A3B8"
-                    style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)' }}
-                  />
-                  <input
-                    type="email"
-                    required
-                    placeholder={isAdminMode ? 'Enter administrator email' : 'Enter your email address'}
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    style={inputStyle}
-                  />
-                </div>
-              </div>
-
-              {/* Password */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <label style={{ ...labelStyle, marginBottom: 0 }}>
-                    {isAdminMode ? 'Admin Password' : 'Password'}
-                  </label>
-                  {!isAdminMode && (
-                    <button
-                      type="button"
-                      onClick={() => switchTab('forgot')}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: '#2563EB',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        padding: 0
-                      }}
-                    >
-                      Forgot password?
-                    </button>
-                  )}
-                </div>
-
-                <div style={{ position: 'relative' }}>
-                  <Lock
-                    size={17}
-                    color="#94A3B8"
-                    style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)' }}
-                  />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    placeholder={isAdminMode ? 'Enter administrator password' : 'Enter your password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    style={{ ...inputStyle, paddingRight: '42px' }}
-                  />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Method Switcher for User Mode: Password vs Magic Link */}
+              {!isAdminMode && (
+                <div
+                  style={{
+                    display: 'flex',
+                    background: '#F1F5F9',
+                    padding: '4px',
+                    borderRadius: '12px',
+                    marginBottom: '4px',
+                    gap: '4px'
+                  }}
+                >
                   <button
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
+                    onClick={() => setLoginMethod('password')}
                     style={{
-                      position: 'absolute',
-                      right: '12px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      background: 'none',
+                      flex: 1,
+                      padding: '8px 0',
+                      borderRadius: '8px',
                       border: 'none',
-                      color: '#94A3B8',
+                      background: loginMethod === 'password' ? '#FFFFFF' : 'transparent',
+                      color: loginMethod === 'password' ? '#0F172A' : '#64748B',
+                      fontWeight: loginMethod === 'password' ? 700 : 500,
+                      fontSize: '0.82rem',
                       cursor: 'pointer',
-                      padding: 0
+                      boxShadow: loginMethod === 'password' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                      transition: 'all 0.15s ease'
                     }}
                   >
-                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                    🔑 Password Login
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setLoginMethod('magiclink')}
+                    style={{
+                      flex: 1,
+                      padding: '8px 0',
+                      borderRadius: '8px',
+                      border: 'none',
+                      background: loginMethod === 'magiclink' ? '#FFFFFF' : 'transparent',
+                      color: loginMethod === 'magiclink' ? '#2563EB' : '#64748B',
+                      fontWeight: loginMethod === 'magiclink' ? 700 : 500,
+                      fontSize: '0.82rem',
+                      cursor: 'pointer',
+                      boxShadow: loginMethod === 'magiclink' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    ✨ Email Link Only (No Password)
                   </button>
                 </div>
-              </div>
+              )}
 
-              {/* CTA Button: Enter to TypeMaster -> */}
-              <button
-                type="submit"
-                disabled={loading}
-                style={{
-                  width: '100%',
-                  padding: '13px',
-                  borderRadius: '12px',
-                  border: 'none',
-                  background: isAdminMode
-                    ? 'linear-gradient(135deg, #0F172A 0%, #1E293B 100%)'
-                    : 'linear-gradient(90deg, #1D4ED8 0%, #2563EB 100%)',
-                  color: '#FFFFFF',
-                  fontSize: '0.92rem',
-                  fontWeight: 700,
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  boxShadow: isAdminMode
-                    ? '0 6px 18px rgba(15, 23, 42, 0.25)'
-                    : '0 6px 18px rgba(37, 99, 235, 0.3)',
-                  marginTop: '4px',
-                  transition: 'transform 0.15s, box-shadow 0.15s'
-                }}
-              >
-                {loading
-                  ? 'Authenticating...'
-                  : isAdminMode
-                  ? 'Access Admin Dashboard →'
-                  : 'Enter to TypeMaster →'}
-              </button>
+              {/* Passwordless Magic Link Form */}
+              {!isAdminMode && loginMethod === 'magiclink' ? (
+                <form onSubmit={handleMagicLinkSignIn} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div
+                    style={{
+                      background: '#EFF6FF',
+                      border: '1px solid #BFDBFE',
+                      borderRadius: '12px',
+                      padding: '12px 14px',
+                      fontSize: '0.82rem',
+                      color: '#1E40AF',
+                      lineHeight: 1.5,
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '8px'
+                    }}
+                  >
+                    <Sparkles size={18} color="#2563EB" style={{ flexShrink: 0, marginTop: '2px' }} />
+                    <div>
+                      <strong>Passwordless Sign-In:</strong> Enter your email address and we will send a secure 1-click login link directly to your inbox. You can access your account with only your email and update your password in Settings!
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={labelStyle}>Your Email Address</label>
+                    <div style={{ position: 'relative' }}>
+                      <Mail
+                        size={17}
+                        color="#94A3B8"
+                        style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)' }}
+                      />
+                      <input
+                        type="email"
+                        required
+                        placeholder="Enter your email address"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        style={inputStyle}
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    style={{
+                      width: '100%',
+                      padding: '13px',
+                      borderRadius: '12px',
+                      border: 'none',
+                      background: 'linear-gradient(90deg, #1D4ED8 0%, #2563EB 100%)',
+                      color: '#FFFFFF',
+                      fontSize: '0.92rem',
+                      fontWeight: 700,
+                      cursor: loading ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      boxShadow: '0 6px 18px rgba(37, 99, 235, 0.3)',
+                      marginTop: '4px'
+                    }}
+                  >
+                    {loading ? 'Sending One-Click Link...' : 'Send Magic Login Link →'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setLoginMethod('password')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#64748B',
+                      fontSize: '0.82rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      textAlign: 'center'
+                    }}
+                  >
+                    ← Or sign in with password instead
+                  </button>
+                </form>
+              ) : (
+                /* Standard Password Form */
+                <form onSubmit={handleSignIn} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/* Email Address */}
+                  <div>
+                    <label style={labelStyle}>
+                      {isAdminMode ? 'Admin Email Address' : 'Email Address'}
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <Mail
+                        size={17}
+                        color="#94A3B8"
+                        style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)' }}
+                      />
+                      <input
+                        type="email"
+                        required
+                        placeholder={isAdminMode ? 'Enter administrator email' : 'Enter your email address'}
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        style={inputStyle}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Password */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                      <label style={{ ...labelStyle, marginBottom: 0 }}>
+                        {isAdminMode ? 'Admin Password' : 'Password'}
+                      </label>
+                      {!isAdminMode && (
+                        <button
+                          type="button"
+                          onClick={() => switchTab('forgot')}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#2563EB',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            padding: 0
+                          }}
+                        >
+                          Forgot password?
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={{ position: 'relative' }}>
+                      <Lock
+                        size={17}
+                        color="#94A3B8"
+                        style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)' }}
+                      />
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        placeholder={isAdminMode ? 'Enter administrator password' : 'Enter your password'}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        style={{ ...inputStyle, paddingRight: '42px' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        style={{
+                          position: 'absolute',
+                          right: '12px',
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          background: 'none',
+                          border: 'none',
+                          color: '#94A3B8',
+                          cursor: 'pointer',
+                          padding: 0
+                        }}
+                      >
+                        {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                      </button>
+                    </div>
+
+                    {!isAdminMode && (
+                      <div style={{ textAlign: 'right', marginTop: '6px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setLoginMethod('magiclink')}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#2563EB',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            padding: 0
+                          }}
+                        >
+                          ✨ Forgot password? Sign in with email link only
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* CTA Button: Enter to TypeMaster -> */}
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    style={{
+                      width: '100%',
+                      padding: '13px',
+                      borderRadius: '12px',
+                      border: 'none',
+                      background: isAdminMode
+                        ? 'linear-gradient(135deg, #0F172A 0%, #1E293B 100%)'
+                        : 'linear-gradient(90deg, #1D4ED8 0%, #2563EB 100%)',
+                      color: '#FFFFFF',
+                      fontSize: '0.92rem',
+                      fontWeight: 700,
+                      cursor: loading ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      boxShadow: isAdminMode
+                        ? '0 6px 18px rgba(15, 23, 42, 0.25)'
+                        : '0 6px 18px rgba(37, 99, 235, 0.3)',
+                      marginTop: '4px',
+                      transition: 'transform 0.15s, box-shadow 0.15s'
+                    }}
+                  >
+                    {loading
+                      ? 'Authenticating...'
+                      : isAdminMode
+                      ? 'Access Admin Dashboard →'
+                      : 'Enter to TypeMaster →'}
+                  </button>
+                </form>
+              )}
 
 
 
@@ -1065,7 +1252,7 @@ export default function LoginView({
                   </button>
                 </>
               )}
-            </form>
+            </div>
           )}
 
           {/* ========================================================= */}
@@ -1330,10 +1517,20 @@ export default function LoginView({
           {/* TAB 4: FORGOT PASSWORD */}
           {/* ========================================================= */}
           {activeTab === 'forgot' && !isAdminMode && (
-            <form onSubmit={handleForgotPassword} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <p style={{ fontSize: '0.84rem', color: '#64748B', lineHeight: 1.5, margin: 0 }}>
-                Enter your registered email address and we will send you secure instructions to reset your password.
-              </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div
+                style={{
+                  background: '#EFF6FF',
+                  border: '1px solid #BFDBFE',
+                  borderRadius: '12px',
+                  padding: '12px 14px',
+                  fontSize: '0.82rem',
+                  color: '#1E40AF',
+                  lineHeight: 1.5
+                }}
+              >
+                Enter your registered email address. You can choose to receive a secure <strong>Password Reset Link</strong> or <strong>Sign in Instantly with an Email Link</strong> without any password!
+              </div>
 
               <div>
                 <label style={labelStyle}>Registered Email</label>
@@ -1354,8 +1551,10 @@ export default function LoginView({
                 </div>
               </div>
 
+              {/* Action 1: Send Password Reset Link */}
               <button
-                type="submit"
+                type="button"
+                onClick={handleForgotPassword}
                 disabled={loading}
                 style={{
                   width: '100%',
@@ -1366,10 +1565,40 @@ export default function LoginView({
                   color: '#FFFFFF',
                   fontSize: '0.92rem',
                   fontWeight: 700,
-                  cursor: loading ? 'not-allowed' : 'pointer'
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  boxShadow: '0 6px 18px rgba(37, 99, 235, 0.3)'
                 }}
               >
-                {loading ? 'Sending Link...' : 'Send Password Reset Link →'}
+                {loading ? 'Sending...' : 'Send Password Reset Link →'}
+              </button>
+
+              {/* Action 2: Passwordless Instant Login Link */}
+              <button
+                type="button"
+                onClick={handleMagicLinkSignIn}
+                disabled={loading}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  borderRadius: '12px',
+                  border: '1.5px solid #2563EB',
+                  background: '#EFF6FF',
+                  color: '#1D4ED8',
+                  fontSize: '0.88rem',
+                  fontWeight: 700,
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px'
+                }}
+              >
+                <Sparkles size={16} />
+                <span>Sign In Instantly with Email Link (No Password Needed)</span>
               </button>
 
               <button
@@ -1381,12 +1610,14 @@ export default function LoginView({
                   color: '#64748B',
                   fontSize: '0.82rem',
                   fontWeight: 600,
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  padding: '6px'
                 }}
               >
                 ← Back to Sign In
               </button>
-            </form>
+            </div>
           )}
         </div>
 

@@ -7,22 +7,32 @@ export function triggerFileDownload(blob, filename) {
   const link = document.createElement('a');
   link.style.display = 'none';
   link.href = url;
-  link.setAttribute('download', filename);
-  link.setAttribute('target', '_blank');
+  link.download = filename;
+  // NEVER use target="_blank" on blob downloads in Chromium, as it causes downloads to be named after the blob UUID!
   document.body.appendChild(link);
   link.click();
 
   setTimeout(() => {
     document.body.removeChild(link);
     window.URL.revokeObjectURL(url);
-  }, 1000);
+  }, 2000);
 }
 
 export function exportWorkbookToExcel(workbook, filename = 'TypeMaster_Admin_Report.xlsx') {
-  const cleanFilename = filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`;
+  const cleanFilename = filename.toLowerCase().endsWith('.xlsx') ? filename : `${filename}.xlsx`;
+  try {
+    // Official SheetJS browser download method - forces exact filename.xlsx
+    if (typeof XLSX !== 'undefined' && typeof XLSX.writeFile === 'function') {
+      XLSX.writeFile(workbook, cleanFilename, { bookType: 'xlsx', compression: true });
+      return;
+    }
+  } catch (err) {
+    console.warn('XLSX.writeFile notice, falling back to blob download:', err);
+  }
+
   const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([excelBuffer], {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=UTF-8'
   });
   triggerFileDownload(blob, cleanFilename);
 }
@@ -33,6 +43,59 @@ export function exportDataToCsv(data, filename = 'TypeMaster_Admin_Report.csv') 
   const csv = XLSX.utils.sheet_to_csv(ws);
   const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
   triggerFileDownload(blob, cleanFilename);
+}
+
+// Universal date filter helper for all Admin Portal views
+export function isDateInPeriod(dateInput, period) {
+  if (!period || period === 'All Time' || period === 'All') return true;
+  if (!dateInput) return false;
+
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const todayYMD = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+  if (typeof dateInput === 'string') {
+    const trimmed = dateInput.trim();
+    if (trimmed.toLowerCase() === 'today' || trimmed.toLowerCase() === 'just now') {
+      return period === 'Today' || period === 'Last 7 Days' || period.includes('30 Days') || period === 'This Quarter';
+    }
+  }
+
+  let ymd = '';
+  if (typeof dateInput === 'string') {
+    const trimmed = dateInput.trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+      ymd = trimmed.substring(0, 10);
+    } else {
+      const parsed = new Date(trimmed);
+      if (!isNaN(parsed.getTime())) {
+        ymd = `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`;
+      }
+    }
+  } else if (dateInput instanceof Date && !isNaN(dateInput.getTime())) {
+    ymd = `${dateInput.getFullYear()}-${pad(dateInput.getMonth() + 1)}-${pad(dateInput.getDate())}`;
+  }
+
+  if (!ymd) return false;
+
+  if (period === 'Today') {
+    return ymd === todayYMD;
+  }
+
+  const parsedTime = new Date(ymd + 'T00:00:00').getTime();
+  const todayTime = new Date(todayYMD + 'T00:00:00').getTime();
+  const diffDays = (todayTime - parsedTime) / (1000 * 60 * 60 * 24);
+
+  if (period === 'Last 7 Days') {
+    return diffDays >= 0 && diffDays <= 7;
+  }
+  if (period.includes('30 Days') || period === 'Last 30 Days') {
+    return diffDays >= 0 && diffDays <= 30;
+  }
+  if (period === 'This Quarter') {
+    return diffDays >= 0 && diffDays <= 90;
+  }
+  return true;
 }
 
 // Initial structured typing tests
@@ -301,13 +364,23 @@ class AdminService {
   }
 
   // Get live aggregated dashboard metrics from real database rows
-  async getLiveDashboardMetrics() {
-    const users = await this.fetchAllUsersLive();
-    const testLogs = await this.fetchAllTestLogsLive();
+  async getLiveDashboardMetrics(timeframe = 'All Time') {
+    const allUsers = await this.fetchAllUsersLive();
+    const allTestLogs = await this.fetchAllTestLogsLive();
 
-    const totalUsers = users.length;
-    // Active users: users with tests completed or updated within 30 days
-    const activeUsers = Math.max(1, users.filter(u => u.testsTaken > 0 || u.status === 'Active').length);
+    const isFiltered = timeframe && timeframe !== 'All Time' && timeframe !== 'All';
+    const users = isFiltered
+      ? allUsers.filter(u => isDateInPeriod(u.joinedOn || u.created_at, timeframe))
+      : allUsers;
+    const testLogs = isFiltered
+      ? allTestLogs.filter(l => isDateInPeriod(l.created_at || l.date, timeframe))
+      : allTestLogs;
+
+    const totalUsers = isFiltered ? users.length : allUsers.length;
+    // Active users: users with tests completed or active within the timeframe
+    const activeUsers = isFiltered
+      ? Math.max(testLogs.map(l => l.user_id).filter(Boolean).length, users.filter(u => u.testsTaken > 0).length)
+      : Math.max(1, allUsers.filter(u => u.testsTaken > 0 || u.status === 'Active').length);
     const testsCompleted = testLogs.length;
 
     // Platform Avg WPM
@@ -524,8 +597,8 @@ class AdminService {
   // EXCEL & CSV EXPORTS: NATIVE BLOB DOWNLOAD & EXPLICIT FILENAMES
   // ==========================================================
 
-  exportUsersToExcel(format = 'xlsx') {
-    const users = this.getUsers();
+  exportUsersToExcel(format = 'xlsx', customUsers = null) {
+    const users = customUsers || this.getUsers();
     const exportData = users.map(u => ({
       'User ID': u.id,
       'Full Name': u.name,
@@ -636,6 +709,161 @@ class AdminService {
       XLSX.utils.book_append_sheet(wb, ws, 'Audit_Trail');
       exportWorkbookToExcel(wb, fileName);
     }
+  }
+
+  exportDashboardToExcel(metrics = {}) {
+    const dateStr = new Date().toISOString().split('T')[0];
+    const fileName = `TypeMaster_Dashboard_${dateStr}.xlsx`;
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: KPIs
+    const kpiData = [
+      { 'Metric': 'Total Platform Users', 'Value': metrics.totalUsers || 0 },
+      { 'Metric': 'Active Daily Typists', 'Value': metrics.activeUsers || 0 },
+      { 'Metric': 'Total Tests Completed', 'Value': metrics.testsCompleted || 0 },
+      { 'Metric': 'Global Average Speed', 'Value': `${metrics.avgWpm || 0} WPM` },
+      { 'Metric': 'Milestone Badges Earned', 'Value': metrics.achievementsEarned || 0 },
+      { 'Metric': 'Telemetry Status', 'Value': 'Live Synchronized' },
+      { 'Metric': 'Report Generated At', 'Value': new Date().toLocaleString() }
+    ];
+    const wsKpi = XLSX.utils.json_to_sheet(kpiData);
+    XLSX.utils.book_append_sheet(wb, wsKpi, 'KPI_Overview');
+
+    // Sheet 2: Recent Test Activity
+    if (metrics.latestTestAttempts && metrics.latestTestAttempts.length > 0) {
+      const attemptsData = metrics.latestTestAttempts.map(a => ({
+        'Typist': a.user,
+        'Test Category': a.type,
+        'Speed (WPM)': a.wpm,
+        'Accuracy': a.accuracy,
+        'Duration': a.time,
+        'Timestamp': a.date
+      }));
+      const wsAttempts = XLSX.utils.json_to_sheet(attemptsData);
+      XLSX.utils.book_append_sheet(wb, wsAttempts, 'Recent_Test_Activity');
+    }
+
+    // Sheet 3: Speed Brackets Distribution
+    if (metrics.speedDistribution && metrics.speedDistribution.length > 0) {
+      const distData = metrics.speedDistribution.map(s => ({
+        'WPM Bracket': s.bracket,
+        'Percentage': `${s.pct}%`
+      }));
+      const wsDist = XLSX.utils.json_to_sheet(distData);
+      XLSX.utils.book_append_sheet(wb, wsDist, 'Speed_Distribution');
+    }
+
+    exportWorkbookToExcel(wb, fileName);
+    this.logAudit('Data Exported', 'Admin Dashboard', `Exported live dashboard metrics to ${fileName}`);
+  }
+
+  exportFeedbackToExcel(feedbackList = []) {
+    const dateStr = new Date().toISOString().split('T')[0];
+    const fileName = `TypeMaster_User_Feedback_${dateStr}.xlsx`;
+    const wb = XLSX.utils.book_new();
+
+    const exportRows = (feedbackList || []).map((f, idx) => ({
+      'Record #': idx + 1,
+      'User Name': f.userName || f.username || 'Typist',
+      'User Email': f.userEmail || f.email || 'N/A',
+      'Category': f.category || 'General Feedback',
+      'Rating (Stars)': f.rating ? `${f.rating} ★` : 'Not Rated',
+      'Subject': f.subject || 'N/A',
+      'Feedback Message': f.message || f.comment || '',
+      'Status': f.status || 'Received',
+      'Administrator Response': f.admin_response || f.adminReply || 'Pending Response',
+      'Submitted At': f.created_at || f.createdAt || f.date || 'Recent'
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(exportRows.length > 0 ? exportRows : [{ 'Notice': 'No feedback records submitted yet' }]);
+    XLSX.utils.book_append_sheet(wb, ws, 'User_Feedback');
+    exportWorkbookToExcel(wb, fileName);
+    this.logAudit('Data Exported', 'Feedback Management', `Exported ${exportRows.length} feedback records to ${fileName}`);
+  }
+
+  exportAchievementsToExcel(badges = [], rankings = []) {
+    const dateStr = new Date().toISOString().split('T')[0];
+    const fileName = `TypeMaster_Achievements_${dateStr}.xlsx`;
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Global Typist Leaderboard
+    const ranks = rankings && rankings.length > 0 ? rankings : this.getLeaderboardRankings('All-Time');
+    const rankRows = ranks.map((r, idx) => ({
+      'Rank': r.rank || idx + 1,
+      'Typist Name': r.user || r.name || 'Typist',
+      'Email': r.email || 'N/A',
+      'Speed (WPM)': r.wpm || r.avgWpm || 0,
+      'Accuracy': typeof r.accuracy === 'number' ? `${r.accuracy}%` : (r.accuracy || '98%'),
+      'Tests Completed': r.testsCompleted || r.testsTaken || 0,
+      'Tier': r.tier || 'Master',
+      'Status': r.status || 'Active'
+    }));
+    const wsRank = XLSX.utils.json_to_sheet(rankRows);
+    XLSX.utils.book_append_sheet(wb, wsRank, 'Leaderboard_Rankings');
+
+    // Sheet 2: Achievement Badges Catalog
+    const badgeList = badges && badges.length > 0 ? badges : this.getBadges();
+    const badgeRows = badgeList.map(b => ({
+      'Badge ID': b.id,
+      'Title': b.title,
+      'Description': b.description,
+      'Category': b.category,
+      'Unlock Criteria': b.threshold,
+      'Unlocked Count': b.unlockedCount || 0
+    }));
+    const wsBadges = XLSX.utils.json_to_sheet(badgeRows);
+    XLSX.utils.book_append_sheet(wb, wsBadges, 'Milestone_Badges');
+
+    exportWorkbookToExcel(wb, fileName);
+    this.logAudit('Data Exported', 'Achievements & Leaderboards', `Exported rankings and badges catalog to ${fileName}`);
+    return true;
+  }
+
+  exportSettingsToExcel(settings = {}) {
+    const dateStr = new Date().toISOString().split('T')[0];
+    const fileName = `TypeMaster_Settings_Config_${dateStr}.xlsx`;
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: System Security & AI Config
+    const configRows = [
+      { 'Configuration Parameter': 'Two-Factor Authentication', 'Status / Value': settings.twoFactor ? 'Enabled' : 'Disabled' },
+      { 'Configuration Parameter': 'Admin Session Inactivity Timeout', 'Status / Value': `${settings.sessionTimeout || 60} Minutes` },
+      { 'Configuration Parameter': 'RBAC Policy', 'Status / Value': 'Strict (Admin Role Enforced)' },
+      { 'Configuration Parameter': 'Gemini AI Integration', 'Status / Value': settings.geminiActive ? 'Active & Configured' : 'Local Fallback' },
+      { 'Configuration Parameter': 'Selected Gemini AI Model', 'Status / Value': settings.geminiModel || 'gemini-2.5-flash' },
+      { 'Configuration Parameter': 'Export Timestamp', 'Status / Value': new Date().toLocaleString() }
+    ];
+    const wsConfig = XLSX.utils.json_to_sheet(configRows);
+    XLSX.utils.book_append_sheet(wb, wsConfig, 'System_Config');
+
+    // Sheet 2: Provisioned Administrators
+    const admins = this.getActiveAdmins();
+    const adminRows = admins.map(a => ({
+      'ID': a.id,
+      'Administrator Name': a.name || a.username,
+      'Email Address': a.email,
+      'Role': a.role,
+      'Status': a.status,
+      'Provisioned On': a.joinedOn
+    }));
+    const wsAdmins = XLSX.utils.json_to_sheet(adminRows);
+    XLSX.utils.book_append_sheet(wb, wsAdmins, 'Active_Administrators');
+
+    // Sheet 3: Audit Trail
+    const logs = this.getAuditLogs();
+    const logRows = logs.map(l => ({
+      'Timestamp': l.timestamp,
+      'Action': l.action,
+      'Target': l.target,
+      'Details': l.details,
+      'Administrator': l.admin || 'Admin'
+    }));
+    const wsLogs = XLSX.utils.json_to_sheet(logRows);
+    XLSX.utils.book_append_sheet(wb, wsLogs, 'Audit_Trail');
+
+    exportWorkbookToExcel(wb, fileName);
+    this.logAudit('Data Exported', 'Admin Settings', `Exported configuration, admins and audit trail to ${fileName}`);
+    return true;
   }
 
   // ==========================================================
@@ -879,8 +1107,71 @@ class AdminService {
   }
 
   getActiveAdmins() {
-    const users = this.getUsers();
-    return users.filter(u => u.role === 'admin' || u.email === 'admin@typemaster.com');
+    const authorizedEmails = supabaseService.getAuthorizedAdminEmails().map(e => e.toLowerCase().trim());
+    const accounts = supabaseService._getLocal('users_registry', []);
+    const adminMap = new Map();
+
+    // Default primary admin
+    adminMap.set('admin@typemaster.com', {
+      id: 'admin_master_01',
+      name: 'Admin Administrator',
+      username: 'Admin Administrator',
+      email: 'admin@typemaster.com',
+      role: 'admin',
+      status: 'Active',
+      joinedOn: '2026-10-09'
+    });
+
+    // Built-in PAR Academy admin
+    adminMap.set('paracademy@typemaster.com', {
+      id: 'admin_paracademy_01',
+      name: 'PAR Academy Admin',
+      username: 'PAR Academy Admin',
+      email: 'paracademy@typemaster.com',
+      role: 'admin',
+      status: 'Active',
+      joinedOn: '2026-10-10'
+    });
+
+    accounts.forEach(acc => {
+      const email = (acc.email || '').toLowerCase().trim();
+      if (acc.role === 'admin' || authorizedEmails.includes(email) || email === 'admin@typemaster.com') {
+        adminMap.set(email || acc.id, {
+          id: acc.id,
+          name: acc.displayName || acc.display_name || acc.username || 'Admin',
+          username: acc.username || 'Admin',
+          email: acc.email,
+          role: 'admin',
+          status: acc.status || 'Active',
+          joinedOn: acc.created_at ? acc.created_at.split('T')[0] : '2026-10-10'
+        });
+      }
+    });
+
+    authorizedEmails.forEach(em => {
+      if (!adminMap.has(em)) {
+        adminMap.set(em, {
+          id: `admin_${em.replace(/[^a-zA-Z0-9]/g, '_')}`,
+          name: em.split('@')[0],
+          username: em.split('@')[0],
+          email: em,
+          role: 'admin',
+          status: 'Active',
+          joinedOn: '2026-10-10'
+        });
+      }
+    });
+
+    return Array.from(adminMap.values());
+  }
+
+  async revokeAdministrator(email) {
+    if (!email || email.toLowerCase() === 'admin@typemaster.com') {
+      return { success: false, message: 'Primary Master Admin cannot be revoked.' };
+    }
+    const res = await supabaseService.revokeAdminUser(email);
+    this.logAudit('Administrator Revoked', email, `Admin access revoked for ${email}`);
+    return res;
   }
 
   async updateUserTier(userId, isPremium) {
@@ -894,12 +1185,22 @@ class AdminService {
   // REAL-TIME REPORTS ENGINE: ZERO MOCK DATA
   // ==========================================================
   async getLiveReportsData(timeframe = 'Last 30 Days') {
-    const users = await this.fetchAllUsersLive();
-    const testLogs = await this.fetchAllTestLogsLive();
+    const allUsers = await this.fetchAllUsersLive();
+    const allTestLogs = await this.fetchAllTestLogsLive();
+
+    const isFiltered = timeframe && timeframe !== 'All Time' && timeframe !== 'All';
+    const users = isFiltered
+      ? allUsers.filter(u => isDateInPeriod(u.joinedOn || u.created_at, timeframe))
+      : allUsers;
+    const testLogs = isFiltered
+      ? allTestLogs.filter(l => isDateInPeriod(l.created_at || l.date, timeframe))
+      : allTestLogs;
 
     const totalTestsConducted = testLogs.length;
-    const activeUsersCount = users.filter(u => u.testsTaken > 0 || u.status === 'Active').length;
-    const totalUsers = users.length;
+    const activeUsersCount = isFiltered
+      ? Math.max(testLogs.map(l => l.user_id).filter(Boolean).length, users.filter(u => u.testsTaken > 0).length)
+      : users.filter(u => u.testsTaken > 0 || u.status === 'Active').length;
+    const totalUsers = isFiltered ? users.length : allUsers.length;
 
     // Platform Avg WPM strictly from real test logs
     const validWpms = testLogs.map(l => Number(l.wpm) || 0).filter(w => w > 0);

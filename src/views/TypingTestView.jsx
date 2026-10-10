@@ -14,7 +14,8 @@ import {
   CheckCircle2,
   Trophy,
   Award,
-  ArrowRight
+  ArrowRight,
+  CalendarClock
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import VirtualKeyboard from '../components/VirtualKeyboard';
@@ -195,11 +196,17 @@ export default function TypingTestView({
   }, [fetchDynamicPassage, category, difficulty, language, duration, promptText]);
 
   useEffect(() => {
-    if (initialSettings.customPrompt) {
-      setPromptText(initialSettings.customPrompt);
-      setPromptSource('drill');
+    if (initialSettings.customPrompt || initialSettings.promptText || initialSettings.content) {
+      const customP = initialSettings.customPrompt || initialSettings.promptText || initialSettings.content;
+      setPromptText(customP);
+      setPromptSource(initialSettings.scheduledTestId ? 'scheduled_test' : 'drill');
       if (initialSettings.category) setCategory(initialSettings.category);
       if (initialSettings.difficulty) setDifficulty(initialSettings.difficulty);
+      if (initialSettings.duration) {
+        const durVal = typeof initialSettings.duration === 'number' ? initialSettings.duration : 60;
+        setDuration(durVal);
+        setTimeLeft(durVal);
+      }
     } else {
       fetchDynamicPassage(category, difficulty, language, duration);
     }
@@ -430,6 +437,8 @@ export default function TypingTestView({
       elapsedSeconds: finalDuration,
       category,
       difficulty,
+      scheduled_test_id: initialSettings.scheduledTestId || null,
+      scheduled_test_title: initialSettings.scheduledTestTitle || null,
       promptText,
       typedInput: currentInput,
       mistakeDetails: mistakeAnalysis.mistakeWords,
@@ -553,6 +562,92 @@ export default function TypingTestView({
           <p>Test your typing speed and accuracy. Choose duration, difficulty and start typing!</p>
         </div>
       </div>
+
+      {/* Sub-navigation Tabs: Speed Test | Scheduled Tests */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          marginBottom: '16px',
+          background: '#f1f5f9',
+          padding: '4px',
+          borderRadius: '12px',
+          width: 'fit-content'
+        }}
+      >
+        <button
+          type="button"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '7px 16px',
+            borderRadius: '9px',
+            border: 'none',
+            fontSize: '0.84rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            background: '#ffffff',
+            color: '#2563eb',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+          }}
+        >
+          <KeyboardIcon size={15} />
+          Speed Test
+        </button>
+        <button
+          type="button"
+          onClick={() => onNavigate && onNavigate('scheduled-tests')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '7px 16px',
+            borderRadius: '9px',
+            border: 'none',
+            fontSize: '0.84rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            background: 'transparent',
+            color: '#64748b',
+            transition: 'all 0.15s'
+          }}
+          title="Browse published scheduled typing challenges"
+        >
+          <CalendarClock size={15} />
+          Scheduled Tests
+        </button>
+      </div>
+
+      {/* If this is a scheduled challenge, display prominent banner */}
+      {initialSettings.scheduledTestId && (
+        <div
+          style={{
+            background: 'linear-gradient(135deg, #1E1B4B 0%, #312E81 100%)',
+            color: '#FFFFFF',
+            padding: '12px 20px',
+            borderRadius: '12px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            boxShadow: '0 4px 14px rgba(49, 46, 129, 0.25)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ background: '#10B981', color: '#FFFFFF', padding: '3px 8px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 800 }}>
+              SCHEDULED CHALLENGE
+            </span>
+            <span style={{ fontWeight: 800, fontSize: '0.94rem' }}>
+              {initialSettings.scheduledTestTitle || 'Official Typing Challenge'}
+            </span>
+          </div>
+          <span style={{ fontSize: '0.78rem', color: '#C7D2FE' }}>
+            Official Passage Loaded • Verified Attempt
+          </span>
+        </div>
+      )}
 
       {/* Top Test Controls matching Image 2 */}
       <div

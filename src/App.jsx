@@ -14,6 +14,7 @@ import HelpView from './views/HelpView';
 import FeedbackView from './views/FeedbackView';
 import LoginView from './views/LoginView';
 import AdminPortal from './views/admin/AdminPortal';
+import ScheduledTestsView from './views/ScheduledTestsView';
 import SupabaseModal from './components/SupabaseModal';
 import PremiumModal from './components/PremiumModal';
 import TestDetailModal from './components/TestDetailModal';
@@ -116,6 +117,7 @@ export default function App() {
     if (path === 'performance') return 'performance';
     if (path === 'test-history' || path === 'history') return 'history';
     if (path === 'typing-test') return 'typing-test';
+    if (path === 'scheduled-tests' || path === 'challenges') return 'scheduled-tests';
     if (path === 'leaderboard') return 'leaderboard';
     if (path === 'progress') return 'progress';
     if (path === 'feedback') return 'feedback';
@@ -364,6 +366,48 @@ export default function App() {
     navigateTo('typing-test');
   };
 
+  // Handle starting a scheduled test
+  const handleStartScheduledTest = (test) => {
+    if (!test) return;
+
+    const now = new Date();
+    const startsAt = new Date(test.starts_at);
+    const endsAt = new Date(test.ends_at);
+
+    if (test.publication_status !== 'published') {
+      alert('This test is not currently published.');
+      return;
+    }
+
+    if (now < startsAt) {
+      alert(`This scheduled test has not started yet. Opens at ${startsAt.toLocaleString()}`);
+      return;
+    }
+
+    if (now > endsAt) {
+      alert('This scheduled test has already ended.');
+      return;
+    }
+
+    if (test.max_participants && (test.participants_count || 0) >= test.max_participants) {
+      alert(`This test has reached its maximum participant limit (${test.max_participants}).`);
+      return;
+    }
+
+    const durationSec = test.duration || (test.duration_minutes ? test.duration_minutes * 60 : 60);
+
+    setTestSettings({
+      duration: durationSec,
+      difficulty: test.difficulty || 'Easy',
+      category: test.category || 'General',
+      customPrompt: test.content,
+      promptText: test.content,
+      scheduledTestId: test.id,
+      scheduledTestTitle: test.title
+    });
+    navigateTo('typing-test');
+  };
+
   // Handle user tier toggle
   const handleTogglePremium = async (newVal) => {
     await supabaseService.setUserTier(newVal, activeTypistUser?.id);
@@ -566,6 +610,14 @@ export default function App() {
           <TypingTestView
             initialSettings={testSettings}
             onTestCompleted={refreshDashboard}
+            onNavigate={(view) => navigateTo(view)}
+          />
+        )}
+
+        {currentView === 'scheduled-tests' && (
+          <ScheduledTestsView
+            user={displayedUser}
+            onStartScheduledTest={handleStartScheduledTest}
             onNavigate={(view) => navigateTo(view)}
           />
         )}

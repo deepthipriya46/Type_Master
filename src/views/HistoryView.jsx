@@ -205,7 +205,26 @@ export default function HistoryView({ recentTests = [], onHistoryCleared, onNavi
             <tbody>
               {filtered.map((test) => (
                 <tr key={test.id}>
-                  <td>{test.date}</td>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span>{test.date}</span>
+                      {(test.scheduled_test_id || test.scheduled_test_title) && (
+                        <span
+                          style={{
+                            background: '#EDE9FE',
+                            color: '#6D28D9',
+                            fontSize: '0.68rem',
+                            padding: '2px 7px',
+                            borderRadius: '999px',
+                            fontWeight: 700
+                          }}
+                          title={test.scheduled_test_title || 'Official Scheduled Test'}
+                        >
+                          Scheduled
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td>{test.duration}</td>
                   <td style={{ fontWeight: 800, color: '#2563eb' }}>{test.wpm}</td>
                   <td>{test.accuracy}%</td>

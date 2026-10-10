@@ -7,6 +7,7 @@ import AdminPerformanceView from './AdminPerformanceView';
 import AdminTypingTestsView from './AdminTypingTestsView';
 import AdminPracticeContentView from './AdminPracticeContentView';
 import AdminAchievementsView from './AdminAchievementsView';
+import AdminScheduledTestsView from './AdminScheduledTestsView';
 import AdminReportsView from './AdminReportsView';
 import AdminFeedbackView from './AdminFeedbackView';
 import AdminAnnouncementsView from './AdminAnnouncementsView';
@@ -101,6 +102,13 @@ export default function AdminPortal({
 
           {currentAdminView === 'achievements' && (
             <AdminAchievementsView
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+            />
+          )}
+
+          {currentAdminView === 'scheduled-tests' && (
+            <AdminScheduledTestsView
               dateRange={dateRange}
               onDateRangeChange={setDateRange}
             />

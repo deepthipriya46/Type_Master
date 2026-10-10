@@ -866,6 +866,38 @@ class AdminService {
     return true;
   }
 
+  exportScheduledTestsToExcel(tests = [], format = 'xlsx') {
+    const dateStr = new Date().toISOString().split('T')[0];
+    const fileName = `TypeMaster_Scheduled_Tests_${dateStr}.${format}`;
+    const rows = (tests || []).map((t, idx) => ({
+      '#': idx + 1,
+      'Test ID': t.id,
+      'Test Title': t.title,
+      'Description': t.description || '',
+      'Category': t.category,
+      'Difficulty': t.difficulty,
+      'Duration (Minutes)': t.duration_minutes || Math.round((t.duration || 60) / 60),
+      'Start Date & Time': t.starts_at ? new Date(t.starts_at).toLocaleString() : '',
+      'End Date & Time': t.ends_at ? new Date(t.ends_at).toLocaleString() : '',
+      'Publication Status': t.publication_status,
+      'Schedule Status': t.computedStatus || t.status,
+      'Participants': `${t.participants_count || 0}${t.max_participants ? ' / ' + t.max_participants : ''}`,
+      'Created By': t.created_by || 'Admin',
+      'Created At': t.created_at ? new Date(t.created_at).toLocaleString() : ''
+    }));
+
+    if (format === 'csv') {
+      exportDataToCsv(rows, fileName);
+    } else {
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, ws, 'Scheduled_Tests');
+      exportWorkbookToExcel(wb, fileName);
+    }
+    this.logAudit('Data Exported', 'Scheduled Tests', `Exported ${tests.length} scheduled test records to ${fileName}`);
+    return true;
+  }
+
   // ==========================================================
   // TYPING TESTS CRUD
   // ==========================================================

@@ -3,6 +3,7 @@ import ParAcademyLogo from './ParAcademyLogo';
 import {
   LayoutDashboard,
   Keyboard,
+  CalendarClock,
   BarChart2,
   Trophy,
   TrendingUp,
@@ -29,6 +30,7 @@ export default function Sidebar({
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'typing-test', label: 'Typing Test', icon: Keyboard },
+    { id: 'scheduled-tests', label: 'Scheduled Tests', icon: CalendarClock },
     { id: 'performance', label: 'My Performance', icon: BarChart2 },
     { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
     { id: 'progress', label: 'Progress', icon: TrendingUp },

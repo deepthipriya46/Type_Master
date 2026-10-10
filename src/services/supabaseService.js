@@ -1964,6 +1964,8 @@ class SupabaseService {
       difficulty,
       result: resultBadge,
       is_valid: isValid,
+      scheduled_test_id: payload.scheduled_test_id || payload.scheduledTestId || null,
+      scheduled_test_title: payload.scheduled_test_title || payload.scheduledTestTitle || null,
       prompt_text: payload.promptText || '',
       typed_input: payload.typedInput || '',
       mistake_details: payload.mistakeDetails || payload.mistake_details || [],
@@ -2151,6 +2153,23 @@ class SupabaseService {
       } catch (err) {
         console.warn('Supabase async transaction write note:', err);
       }
+    }
+
+    // If this test was a Scheduled Test, record attempt & update participant counters
+    if (payload.scheduled_test_id || payload.scheduledTestId) {
+      const scheduledTestId = payload.scheduled_test_id || payload.scheduledTestId;
+      this.recordScheduledTestAttempt({
+        scheduledTestId,
+        userId,
+        userName: updatedUser.displayName || updatedUser.username,
+        userEmail: updatedUser.email,
+        wpm: newLog.wpm,
+        rawWpm: newLog.raw_wpm,
+        accuracy: newLog.accuracy,
+        duration,
+        errors: newLog.errors,
+        characters: newLog.characters
+      }).catch(e => console.warn('Record scheduled attempt note:', e));
     }
 
     // Two-Way Instant Telemetry Broadcast to Admin Portal (admin-live-feed)
@@ -3198,6 +3217,418 @@ class SupabaseService {
         // fallback
       }
     }
+  }
+
+  // ==========================================================
+  // SCHEDULED TESTS & MULTI-PORTAL REAL-TIME SYNCHRONIZATION
+  // ==========================================================
+
+  broadcastScheduledTestsSync(type, payload) {
+    // 1. Cross-tab / cross-portal BroadcastChannel
+    try {
+      const bc = new BroadcastChannel('typemaster-scheduled-tests');
+      bc.postMessage({ type, payload, timestamp: Date.now() });
+      bc.close();
+    } catch {
+      // fallback
+    }
+
+    // 2. Window CustomEvent
+    try {
+      window.dispatchEvent(new CustomEvent('typemaster-scheduled-tests-sync', { detail: { type, payload } }));
+    } catch {
+      // fallback
+    }
+
+    // 3. Supabase Realtime broadcast
+    if (this.isConfigured()) {
+      try {
+        this.supabase.channel('scheduled-tests-realtime').send({
+          type: 'broadcast',
+          event: type,
+          payload
+        });
+      } catch {
+        // fallback
+      }
+    }
+  }
+
+  subscribeScheduledTests(callback) {
+    let subChannel = null;
+
+    // 1. Supabase Postgres Changes and Broadcast
+    if (this.isConfigured()) {
+      try {
+        subChannel = this.supabase
+          .channel('scheduled-tests-realtime')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'scheduled_tests' }, (payload) => {
+            if (typeof callback === 'function') {
+              callback({ source: 'postgres_changes', eventType: payload.eventType, data: payload.new || payload.old });
+            }
+          })
+          .on('broadcast', { event: '*' }, (payload) => {
+            if (typeof callback === 'function') {
+              callback({ source: 'broadcast', ...payload });
+            }
+          })
+          .subscribe();
+      } catch (err) {
+        console.warn('Realtime scheduled tests subscription notice:', err);
+      }
+    }
+
+    // 2. BroadcastChannel
+    let bc = null;
+    try {
+      bc = new BroadcastChannel('typemaster-scheduled-tests');
+      bc.onmessage = (e) => {
+        if (typeof callback === 'function') {
+          callback({ source: 'local_broadcast', ...e.data });
+        }
+      };
+    } catch {
+      // fallback
+    }
+
+    // 3. Window Event
+    const handleWindowEvent = (e) => {
+      if (typeof callback === 'function') {
+        callback({ source: 'window_event', ...e.detail });
+      }
+    };
+    window.addEventListener('typemaster-scheduled-tests-sync', handleWindowEvent);
+
+    // Return cleanup unsubscribe function
+    return () => {
+      if (bc) bc.close();
+      window.removeEventListener('typemaster-scheduled-tests-sync', handleWindowEvent);
+      if (subChannel && this.supabase) {
+        this.supabase.removeChannel(subChannel);
+      }
+    };
+  }
+
+  // Dynamic schedule status evaluator based on real timestamps
+  computeTestScheduleStatus(test) {
+    if (!test) return 'scheduled';
+    if (test.publication_status === 'draft') return 'draft';
+    if (test.publication_status === 'cancelled') return 'cancelled';
+
+    const now = new Date();
+    const startsAt = new Date(test.starts_at);
+    const endsAt = new Date(test.ends_at);
+
+    if (now < startsAt) {
+      return 'upcoming';
+    } else if (now >= startsAt && now <= endsAt) {
+      return 'live';
+    } else {
+      return 'completed';
+    }
+  }
+
+  async fetchScheduledTests(filter = {}) {
+    let rawList = [];
+
+    // 1. Try fetching from Supabase table
+    if (this.isConfigured()) {
+      try {
+        let query = this.supabase
+          .from('scheduled_tests')
+          .select('*')
+          .order('starts_at', { ascending: false });
+
+        if (filter.publishedOnly) {
+          query = query.eq('publication_status', 'published');
+        }
+
+        const { data, error } = await this._withTimeout(query, 4000);
+        if (!error && Array.isArray(data)) {
+          rawList = data;
+        }
+      } catch (err) {
+        console.warn('Supabase fetchScheduledTests note:', err);
+      }
+    }
+
+    // 2. Fallback to local persistent registry if table query was empty or offline
+    if (rawList.length === 0) {
+      const localRegistry = this._getLocal('typemaster_scheduled_tests', []);
+      rawList = localRegistry;
+    }
+
+    // Compute live status and clean values for every test
+    const processed = rawList.map((t) => {
+      const computedStatus = this.computeTestScheduleStatus(t);
+      const durMinutes = Number(t.duration_minutes) || Math.round((Number(t.duration) || 60) / 60) || 1;
+      return {
+        ...t,
+        duration_minutes: durMinutes,
+        duration: Number(t.duration) || (durMinutes * 60),
+        computedStatus,
+        isLive: computedStatus === 'live',
+        isUpcoming: computedStatus === 'upcoming',
+        isCompleted: computedStatus === 'completed',
+        isDraft: computedStatus === 'draft',
+        isCancelled: computedStatus === 'cancelled'
+      };
+    });
+
+    if (filter.publishedOnly) {
+      return processed.filter(t => t.publication_status === 'published');
+    }
+
+    return processed;
+  }
+
+  async fetchScheduledTestById(id) {
+    if (!id) return null;
+    const all = await this.fetchScheduledTests();
+    return all.find(t => t.id === id) || null;
+  }
+
+  async createScheduledTest(testPayload) {
+    const now = new Date();
+    const id = `st_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const durationMinutes = Number(testPayload.duration_minutes) || Math.round((Number(testPayload.duration) || 60) / 60) || 1;
+    const durationSeconds = durationMinutes * 60;
+
+    const startsAt = testPayload.starts_at ? new Date(testPayload.starts_at).toISOString() : now.toISOString();
+    const endsAt = testPayload.ends_at ? new Date(testPayload.ends_at).toISOString() : new Date(now.getTime() + 86400000).toISOString();
+
+    const record = {
+      id,
+      title: (testPayload.title || '').trim() || 'Scheduled Typing Challenge',
+      description: (testPayload.description || '').trim(),
+      content: (testPayload.content || testPayload.passage || '').trim(),
+      category: testPayload.category || 'General',
+      difficulty: testPayload.difficulty || 'Easy',
+      duration: durationSeconds,
+      duration_minutes: durationMinutes,
+      starts_at: startsAt,
+      ends_at: endsAt,
+      publication_status: testPayload.publication_status || 'published',
+      status: testPayload.publication_status === 'draft' ? 'draft' : 'scheduled',
+      max_participants: testPayload.max_participants ? Number(testPayload.max_participants) : null,
+      participants_count: 0,
+      created_by: testPayload.created_by || this.getCurrentUser()?.email || 'admin@typemaster.com',
+      created_at: now.toISOString(),
+      updated_at: now.toISOString()
+    };
+
+    // 1. Persist to Supabase if available
+    if (this.isConfigured()) {
+      try {
+        await this._withTimeout(
+          this.supabase.from('scheduled_tests').insert([record]),
+          4000
+        );
+      } catch (err) {
+        console.warn('Supabase scheduled_tests insert warning:', err);
+      }
+    }
+
+    // 2. Persist to local registry
+    const currentList = this._getLocal('typemaster_scheduled_tests', []);
+    const updated = [record, ...currentList.filter(t => t.id !== id)];
+    this._setLocal('typemaster_scheduled_tests', updated);
+
+    // 3. Multi-portal Realtime Broadcast
+    this.broadcastScheduledTestsSync('TEST_CREATED', record);
+
+    return { success: true, test: record };
+  }
+
+  async updateScheduledTest(id, updates) {
+    const now = new Date();
+    const cleanUpdates = {
+      ...updates,
+      updated_at: now.toISOString()
+    };
+
+    if (cleanUpdates.duration_minutes && !cleanUpdates.duration) {
+      cleanUpdates.duration = cleanUpdates.duration_minutes * 60;
+    }
+
+    // 1. Supabase update
+    if (this.isConfigured()) {
+      try {
+        await this._withTimeout(
+          this.supabase.from('scheduled_tests').update(cleanUpdates).eq('id', id),
+          4000
+        );
+      } catch (err) {
+        console.warn('Supabase updateScheduledTest warning:', err);
+      }
+    }
+
+    // 2. Local store update
+    const currentList = this._getLocal('typemaster_scheduled_tests', []);
+    let updatedRecord = null;
+    const updatedList = currentList.map(t => {
+      if (t.id === id) {
+        updatedRecord = { ...t, ...cleanUpdates };
+        return updatedRecord;
+      }
+      return t;
+    });
+    this._setLocal('typemaster_scheduled_tests', updatedList);
+
+    // 3. Realtime Broadcast
+    this.broadcastScheduledTestsSync('TEST_UPDATED', updatedRecord || { id, ...cleanUpdates });
+
+    return { success: true, test: updatedRecord };
+  }
+
+  async deleteScheduledTest(id) {
+    // 1. Supabase delete
+    if (this.isConfigured()) {
+      try {
+        await this._withTimeout(
+          this.supabase.from('scheduled_tests').delete().eq('id', id),
+          4000
+        );
+      } catch (err) {
+        console.warn('Supabase deleteScheduledTest warning:', err);
+      }
+    }
+
+    // 2. Local store delete
+    const currentList = this._getLocal('typemaster_scheduled_tests', []);
+    const filtered = currentList.filter(t => t.id !== id);
+    this._setLocal('typemaster_scheduled_tests', filtered);
+
+    // 3. Realtime Broadcast
+    this.broadcastScheduledTestsSync('TEST_DELETED', { id });
+
+    return { success: true };
+  }
+
+  async duplicateScheduledTest(id) {
+    const tests = await this.fetchScheduledTests();
+    const target = tests.find(t => t.id === id);
+    if (!target) return { success: false, message: 'Test not found' };
+
+    const duplicatePayload = {
+      ...target,
+      title: `${target.title} (Copy)`,
+      publication_status: 'draft',
+      status: 'draft',
+      participants_count: 0
+    };
+    delete duplicatePayload.id;
+
+    return await this.createScheduledTest(duplicatePayload);
+  }
+
+  async recordScheduledTestAttempt(payload) {
+    const {
+      scheduledTestId,
+      userId,
+      userName,
+      userEmail,
+      wpm,
+      rawWpm,
+      accuracy,
+      duration,
+      errors = 0,
+      characters = 0
+    } = payload;
+
+    if (!scheduledTestId) return { success: false };
+
+    const attemptRecord = {
+      id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      scheduled_test_id: scheduledTestId,
+      user_id: userId,
+      user_name: userName || 'Typist',
+      user_email: userEmail || '',
+      wpm: Math.round(wpm),
+      raw_wpm: Math.round(rawWpm || wpm),
+      accuracy: Math.round(accuracy * 10) / 10,
+      duration,
+      errors,
+      characters,
+      status: 'completed',
+      created_at: new Date().toISOString()
+    };
+
+    // 1. Supabase insert
+    if (this.isConfigured()) {
+      try {
+        await this._withTimeout(
+          this.supabase.from('scheduled_test_attempts').insert([attemptRecord]),
+          4000
+        );
+      } catch (err) {
+        console.warn('Supabase scheduled_test_attempts insert notice:', err);
+      }
+    }
+
+    // 2. Local attempts store
+    const key = `scheduled_attempts_${scheduledTestId}`;
+    const currentAttempts = this._getLocal(key, []);
+    this._setLocal(key, [attemptRecord, ...currentAttempts]);
+
+    // 3. Increment participant count on scheduled test
+    const allTests = this._getLocal('typemaster_scheduled_tests', []);
+    const updatedTests = allTests.map(t => {
+      if (t.id === scheduledTestId) {
+        return {
+          ...t,
+          participants_count: (t.participants_count || 0) + 1
+        };
+      }
+      return t;
+    });
+    this._setLocal('typemaster_scheduled_tests', updatedTests);
+
+    if (this.isConfigured()) {
+      try {
+        const testObj = updatedTests.find(t => t.id === scheduledTestId);
+        if (testObj) {
+          await this.supabase.from('scheduled_tests').update({
+            participants_count: testObj.participants_count
+          }).eq('id', scheduledTestId);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 4. Realtime Broadcast
+    this.broadcastScheduledTestsSync('ATTEMPT_RECORDED', { scheduledTestId, attempt: attemptRecord });
+
+    return { success: true, attempt: attemptRecord };
+  }
+
+  async fetchScheduledTestAttempts(scheduledTestId) {
+    if (this.isConfigured()) {
+      try {
+        const { data, error } = await this._withTimeout(
+          this.supabase
+            .from('scheduled_test_attempts')
+            .select('*')
+            .eq('scheduled_test_id', scheduledTestId)
+            .order('created_at', { ascending: false }),
+          4000
+        );
+        if (!error && Array.isArray(data)) {
+          return data;
+        }
+      } catch (err) {
+        console.warn('fetchScheduledTestAttempts notice:', err);
+      }
+    }
+
+    return this._getLocal(`scheduled_attempts_${scheduledTestId}`, []);
+  }
+
+  async getUserScheduledTestAttempt(scheduledTestId, userId) {
+    if (!scheduledTestId || !userId) return null;
+    const attempts = await this.fetchScheduledTestAttempts(scheduledTestId);
+    return attempts.find(a => a.user_id === userId) || null;
   }
 }
 

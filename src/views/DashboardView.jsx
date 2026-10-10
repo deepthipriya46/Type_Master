@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Zap,
   BarChart3,
@@ -14,10 +14,13 @@ import {
   Settings as SettingsIcon,
   Eye,
   MoreVertical,
-  CheckCircle2,
-  Sparkles
+  Sparkles,
+  CalendarClock,
+  Clock,
+  Timer
 } from 'lucide-react';
 import { WpmPerformanceChart, AccuracyTrendChart } from '../components/AnalyticsCharts';
+import { supabaseService } from '../services/supabaseService';
 
 export default function DashboardView({
   dashboardData,
@@ -43,6 +46,40 @@ export default function DashboardView({
       forceNew
     });
   };
+
+  // Next 3 Upcoming or Live Scheduled Tests
+  const [upcomingTests, setUpcomingTests] = useState([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchUpcoming = async () => {
+      try {
+        const tests = await supabaseService.fetchScheduledTests({ publishedOnly: true });
+        if (isMounted && Array.isArray(tests)) {
+          const now = new Date();
+          const filtered = tests
+            .filter((t) => {
+              const endsAt = new Date(t.ends_at);
+              return endsAt >= now && t.publication_status === 'published';
+            })
+            .sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at))
+            .slice(0, 3);
+          setUpcomingTests(filtered);
+        }
+      } catch (err) {
+        console.warn('Upcoming tests load note:', err);
+      }
+    };
+
+    fetchUpcoming();
+    const unsub = supabaseService.subscribeScheduledTests(() => {
+      fetchUpcoming();
+    });
+    return () => {
+      isMounted = false;
+      if (typeof unsub === 'function') unsub();
+    };
+  }, []);
 
   const todayFormatted = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
@@ -227,6 +264,29 @@ export default function DashboardView({
               <Sparkles size={16} />
               New Text
             </button>
+            <button
+              className="hero-secondary-btn"
+              onClick={() => onNavigate('scheduled-tests')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 22px',
+                borderRadius: '12px',
+                background: 'rgba(255, 255, 255, 0.18)',
+                border: '1px solid rgba(255, 255, 255, 0.35)',
+                color: '#ffffff',
+                fontWeight: 700,
+                fontSize: '0.88rem',
+                cursor: 'pointer',
+                backdropFilter: 'blur(6px)',
+                transition: 'all 0.15s ease'
+              }}
+              title="View live and upcoming scheduled typing challenges"
+            >
+              <CalendarClock size={16} />
+              Scheduled Challenges
+            </button>
           </div>
         </div>
 
@@ -239,6 +299,139 @@ export default function DashboardView({
           />
         </div>
       </div>
+
+      {/* Upcoming Scheduled Challenges Widget (When active/upcoming tests exist) */}
+      {upcomingTests.length > 0 && (
+        <div
+          className="dashboard-card"
+          style={{
+            marginBottom: '24px',
+            background: 'linear-gradient(135deg, #ffffff 0%, #f8faff 100%)',
+            border: '1.5px solid #dbeafe',
+            boxShadow: '0 4px 16px rgba(37, 99, 235, 0.08)'
+          }}
+        >
+          <div className="card-header-row" style={{ marginBottom: '16px' }}>
+            <div className="card-title-group">
+              <CalendarClock size={20} color="#2563eb" />
+              <div>
+                <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
+                  Upcoming Scheduled Challenges
+                </h3>
+                <p style={{ fontSize: '0.78rem', color: '#64748b', margin: '2px 0 0 0' }}>
+                  Official scheduled typing challenges synced across all typists
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => onNavigate('scheduled-tests')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                color: '#2563eb',
+                padding: '6px 14px',
+                borderRadius: '8px',
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                cursor: 'pointer'
+              }}
+            >
+              <span>View All Challenges</span>
+              <ArrowUpRight size={14} />
+            </button>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+              gap: '14px'
+            }}
+          >
+            {upcomingTests.map((t) => {
+              const starts = new Date(t.starts_at);
+              const ends = new Date(t.ends_at);
+              const now = new Date();
+              const isLive = now >= starts && now <= ends;
+
+              return (
+                <div
+                  key={t.id}
+                  style={{
+                    background: '#ffffff',
+                    border: isLive ? '1.5px solid #86efac' : '1px solid #e2e8f0',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    boxShadow: isLive ? '0 4px 12px rgba(16, 185, 129, 0.12)' : '0 1px 3px rgba(0,0,0,0.04)',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span
+                        style={{
+                          fontSize: '0.72rem',
+                          fontWeight: 800,
+                          padding: '3px 8px',
+                          borderRadius: '999px',
+                          background: isLive ? '#ecfdf5' : '#eef2ff',
+                          color: isLive ? '#059669' : '#4f46e5',
+                          border: isLive ? '1px solid #a7f3d0' : '1px solid #c7d2fe'
+                        }}
+                      >
+                        {isLive ? '● Live Now' : 'Upcoming'}
+                      </span>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#64748b' }}>
+                        {t.duration_minutes || 1} min
+                      </span>
+                    </div>
+
+                    <h4 style={{ margin: '0 0 6px 0', fontSize: '0.94rem', fontWeight: 800, color: '#0f172a' }}>
+                      {t.title}
+                    </h4>
+                    <p style={{ margin: '0 0 12px 0', fontSize: '0.78rem', color: '#64748b', lineClamp: 2, WebkitLineClamp: 2, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                      {t.description || 'Official challenge passage. Test your speed against other typists.'}
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '10px', borderTop: '1px solid #f1f5f9' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: '#64748b' }}>
+                      <Clock size={13} />
+                      <span>{starts.toLocaleDateString('en-US', { month: 'short', day: '2-digit' })}, {starts.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+
+                    <button
+                      onClick={() => onNavigate('scheduled-tests')}
+                      style={{
+                        padding: '6px 14px',
+                        borderRadius: '8px',
+                        background: isLive ? '#10b981' : '#2563eb',
+                        color: '#ffffff',
+                        border: 'none',
+                        fontSize: '0.78rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '5px'
+                      }}
+                    >
+                      {isLive ? <Play size={12} fill="#ffffff" /> : null}
+                      {isLive ? 'Start Test' : 'View Test'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Analytics Row: 2 Charts + Achievements Card */}
       <div className="analytics-row">

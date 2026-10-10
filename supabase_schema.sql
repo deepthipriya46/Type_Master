@@ -115,13 +115,53 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.test_sessions;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.feedback;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.system_settings;
 
--- 7. PRODUCTION ROW LEVEL SECURITY POLICIES FOR FEEDBACK
--- (Enforces user isolation so users can insert & read only their own feedback records)
--- Run these in Supabase SQL editor if you wish to enforce strict per-user RLS:
--- DROP POLICY IF EXISTS "Public feedback access" ON public.feedback;
--- CREATE POLICY "Users can insert own feedback" ON public.feedback 
---   FOR INSERT WITH CHECK (auth.uid()::text = user_id OR user_id LIKE 'guest_%');
--- CREATE POLICY "Users can view own feedback" ON public.feedback 
---   FOR SELECT USING (auth.uid()::text = user_id OR user_id LIKE 'guest_%' OR auth.jwt() ->> 'email' = 'admin@typemaster.com');
--- CREATE POLICY "Admins can update feedback status" ON public.feedback 
---   FOR UPDATE USING (auth.jwt() ->> 'email' = 'admin@typemaster.com' OR (SELECT role FROM public.profiles WHERE id = auth.uid()::text) = 'admin');
+-- 8. SCHEDULED TESTS & ATTEMPTS
+CREATE TABLE IF NOT EXISTS public.scheduled_tests (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  content TEXT NOT NULL,
+  category TEXT DEFAULT 'General',
+  difficulty TEXT DEFAULT 'Easy',
+  duration INTEGER DEFAULT 60,
+  duration_minutes INTEGER DEFAULT 1,
+  starts_at TIMESTAMPTZ NOT NULL,
+  ends_at TIMESTAMPTZ NOT NULL,
+  publication_status TEXT DEFAULT 'published' CHECK (publication_status IN ('published', 'draft', 'cancelled')),
+  status TEXT DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'live', 'completed', 'cancelled', 'draft')),
+  max_participants INTEGER DEFAULT NULL,
+  participants_count INTEGER DEFAULT 0,
+  created_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now())
+);
+
+CREATE TABLE IF NOT EXISTS public.scheduled_test_attempts (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  scheduled_test_id UUID REFERENCES public.scheduled_tests(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  user_name TEXT,
+  user_email TEXT,
+  wpm INTEGER NOT NULL,
+  raw_wpm INTEGER,
+  accuracy NUMERIC(5, 2) NOT NULL,
+  duration INTEGER NOT NULL,
+  errors INTEGER DEFAULT 0,
+  characters INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'completed',
+  created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now())
+);
+
+ALTER TABLE public.scheduled_tests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.scheduled_test_attempts ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public scheduled_tests access' AND tablename = 'scheduled_tests') THEN
+    CREATE POLICY "Public scheduled_tests access" ON public.scheduled_tests FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public scheduled_test_attempts access' AND tablename = 'scheduled_test_attempts') THEN
+    CREATE POLICY "Public scheduled_test_attempts access" ON public.scheduled_test_attempts FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+

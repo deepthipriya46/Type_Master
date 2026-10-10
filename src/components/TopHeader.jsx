@@ -153,7 +153,9 @@ export default function TopHeader({
             <div className="user-info">
               <span className="user-name">{user?.username || 'Guest Typist'}</span>
               <span className="user-tier">
-                {user?.is_premium ? 'Premium User' : 'Standard Typist'}
+                {(user?.isGuest || user?.id?.startsWith('guest_'))
+                  ? '⚡ Guest Mode'
+                  : (user?.is_premium ? '👑 Premium User' : 'Standard Typist')}
               </span>
             </div>
           </div>
@@ -175,9 +177,20 @@ export default function TopHeader({
             >
               <div style={{ padding: '6px 8px', borderBottom: '1px solid #f1f5f9', marginBottom: '8px' }}>
                 <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#1e293b' }}>{user?.username}</div>
-                <div style={{ fontSize: '0.72rem', color: '#64748b' }}>{user?.email || 'Guest Mode'}</div>
-                <div style={{ fontSize: '0.7rem', color: user?.is_premium ? '#7c3aed' : '#059669', fontWeight: 600, marginTop: '2px' }}>
-                  {user?.is_premium ? '👑 Premium Member' : 'Standard Member'}
+                <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                  {(user?.isGuest || user?.id?.startsWith('guest_')) ? 'Guest Mode (Anonymous)' : (user?.email || 'Guest Mode')}
+                </div>
+                <div
+                  style={{
+                    fontSize: '0.7rem',
+                    color: (user?.isGuest || user?.id?.startsWith('guest_')) ? '#d97706' : (user?.is_premium ? '#7c3aed' : '#059669'),
+                    fontWeight: 600,
+                    marginTop: '2px'
+                  }}
+                >
+                  {(user?.isGuest || user?.id?.startsWith('guest_'))
+                    ? '⚡ Guest Typist'
+                    : (user?.is_premium ? '👑 Premium Member' : 'Standard Member')}
                 </div>
               </div>
 

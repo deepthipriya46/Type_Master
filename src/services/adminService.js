@@ -804,70 +804,68 @@ class AdminService {
       .map((item, idx) => ({ ...item, rank: idx + 1 }));
   }
 
+  _isSampleFeedback(fb) {
+    if (!fb) return true;
+    const sampleIds = ['fb_001', 'fb_002', 'fb_003', 'fb_004', 'fb_005'];
+    const sampleEmails = ['priya@gmail.com', 'rahulv@gmail.com', 'sneha@gmail.com', 'arjun@gmail.com', 'neha@gmail.com'];
+    const sampleNames = ['Priya Sharma', 'Rahul Verma', 'Sneha Reddy', 'Arjun Kumar', 'Neha Patel'];
+    if (sampleIds.includes(fb.id)) return true;
+    const email = (fb.userEmail || fb.user_email || '').toLowerCase();
+    if (sampleEmails.includes(email)) return true;
+    const name = fb.userName || fb.user_name || '';
+    if (sampleNames.includes(name)) return true;
+    return false;
+  }
+
   // ==========================================================
   // FEEDBACK & REAL-TIME TELEMETRY
   // ==========================================================
   getFeedback() {
-    return this._get('admin_feedback', []);
+    const list = this._get('admin_feedback', []);
+    const cleanList = list.filter(fb => !this._isSampleFeedback(fb));
+    if (cleanList.length !== list.length) {
+      this._set('admin_feedback', cleanList);
+    }
+    return cleanList;
   }
 
   async fetchFeedbackLive() {
-    if (supabaseService.isConfigured()) {
-      try {
-        const res = await supabaseService._withTimeout(
-          supabaseService.supabase.from('feedback').select('*').order('created_at', { ascending: false }),
-          4000
-        );
-        if (!res.error && res.data && res.data.length > 0) {
-          const users = await this.fetchAllUsersLive();
-          return res.data.map(fb => {
-            const matchedUser = users.find(u => u.id === fb.user_id);
-            return {
-              id: fb.id,
-              userId: fb.user_id,
-              userName: matchedUser?.name || 'Registered Typist',
-              userEmail: matchedUser?.email || '',
-              rating: fb.rating || 5,
-              category: 'User Experience',
-              comment: fb.comment || '',
-              date: fb.created_at ? new Date(fb.created_at).toLocaleString() : 'Recent',
-              status: fb.status || 'Received'
-            };
-          });
-        }
-      } catch (err) {
-        console.warn('Feedback live fetch note:', err);
-      }
+    try {
+      const liveList = await supabaseService.fetchFeedbackLive();
+      const cleanList = (liveList || []).filter(fb => !this._isSampleFeedback(fb));
+      this._set('admin_feedback', cleanList);
+      return cleanList;
+    } catch (err) {
+      console.warn('Feedback live fetch error, falling back to local:', err);
+      return this.getFeedback();
     }
-    return this.getFeedback();
   }
 
   addFeedback(fb) {
+    if (this._isSampleFeedback(fb)) return fb;
     const list = this.getFeedback();
     list.unshift(fb);
     this._set('admin_feedback', list);
     return fb;
   }
 
-  resolveFeedback(id, replyNote = '') {
-    const items = this.getFeedback();
-    const fb = items.find(f => f.id === id);
-    if (fb) {
-      fb.status = 'Resolved';
-      fb.adminReply = replyNote;
-      this._set('admin_feedback', items);
-      this.logAudit('Feedback Resolved', fb.userName, `Reply note: ${replyNote || 'Resolved'}`);
-      return fb;
-    }
-    return null;
+  async respondToFeedback(id, replyNote = '', status = 'Resolved') {
+    const res = await supabaseService.respondToFeedback(id, { adminResponse: replyNote, status });
+    const targetUser = res?.item?.userName || 'User';
+    this.logAudit('Feedback Responded', targetUser, `Status: ${status} | Note: ${replyNote || 'None'}`);
+    return res?.item;
   }
 
-  deleteFeedback(id) {
-    let items = this.getFeedback();
-    items = items.filter(f => f.id !== id);
-    this._set('admin_feedback', items);
+  async resolveFeedback(id, replyNote = '') {
+    return this.respondToFeedback(id, replyNote, 'Resolved');
+  }
+
+  async deleteFeedback(id) {
+    await supabaseService.deleteFeedback(id);
+    this.logAudit('Feedback Deleted', id, 'Deleted by administrator');
     return true;
   }
+
 
   // ==========================================================
   // MULTI-ADMIN CREATION & RBAC MANAGEMENT

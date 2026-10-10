@@ -1,13 +1,40 @@
-import React, { useState } from 'react';
-import { Clock, Search, Download, Trash2, ArrowUpDown, FileText, CheckCircle2 } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Clock, Search, Download, Trash2, ArrowUpDown, FileText, CheckCircle2, X } from 'lucide-react';
 import { supabaseService } from '../services/supabaseService';
+import ReviewMistakesView from './ReviewMistakesView';
 
 export default function HistoryView({ recentTests = [], onHistoryCleared, onNavigate }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDuration, setFilterDuration] = useState('all');
   const [clearing, setClearing] = useState(false);
+  const [selectedTestForReview, setSelectedTestForReview] = useState(null);
 
-  const filtered = recentTests.filter((t) => {
+  // Defensively deduplicate recent tests so only 1 report is displayed per test session
+  const uniqueRecentTests = useMemo(() => {
+    const list = [];
+    for (const t of recentTests) {
+      const isDup = list.some(existing => {
+        if (existing.id && t.id && existing.id === t.id) return true;
+        if (existing.created_at && t.created_at) {
+          const diff = Math.abs(new Date(existing.created_at).getTime() - new Date(t.created_at).getTime());
+          if (diff < 5000 && existing.wpm === t.wpm && existing.errors === t.errors) return true;
+        }
+        return (
+          existing.date === t.date &&
+          existing.duration === t.duration &&
+          existing.wpm === t.wpm &&
+          Math.round(existing.accuracy) === Math.round(t.accuracy) &&
+          existing.errors === t.errors
+        );
+      });
+      if (!isDup) {
+        list.push(t);
+      }
+    }
+    return list;
+  }, [recentTests]);
+
+  const filtered = uniqueRecentTests.filter((t) => {
     const matchesSearch = (t.result || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (t.date || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesDuration = filterDuration === 'all' || (t.duration || '').includes(filterDuration);
@@ -52,7 +79,7 @@ export default function HistoryView({ recentTests = [], onHistoryCleared, onNavi
           <p>Chronological record of every completed typing test session.</p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          {recentTests.length > 0 && (
+          {uniqueRecentTests.length > 0 && (
             <>
               <button
                 onClick={handleClearHistory}
@@ -172,6 +199,7 @@ export default function HistoryView({ recentTests = [], onHistoryCleared, onNavi
                 <th>Errors</th>
                 <th>Result</th>
                 <th>Status</th>
+                <th style={{ textAlign: 'center' }}>Review Mistakes</th>
               </tr>
             </thead>
             <tbody>
@@ -198,12 +226,124 @@ export default function HistoryView({ recentTests = [], onHistoryCleared, onNavi
                   <td style={{ fontSize: '0.74rem', color: '#10b981', fontWeight: 600 }}>
                     Verified ✓
                   </td>
+                  <td style={{ textAlign: 'center' }}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTestForReview(test)}
+                      style={{
+                        background: '#EEF2FF',
+                        color: '#4F46E5',
+                        border: '1px solid #C7D2FE',
+                        padding: '5px 12px',
+                        borderRadius: '8px',
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        boxShadow: '0 1px 3px rgba(79, 70, 229, 0.1)'
+                      }}
+                    >
+                      <FileText size={12} /> Review Mistakes
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      {/* Review Past Test Mistakes Modal Overlay */}
+      {selectedTestForReview && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.8)',
+            backdropFilter: 'blur(6px)',
+            zIndex: 10000,
+            overflowY: 'auto',
+            padding: '24px 20px'
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '1300px',
+              margin: '0 auto',
+              background: '#FFFFFF',
+              borderRadius: '24px',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+              border: '1px solid #E2E8F0',
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+          >
+            {/* Modal Close Header */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '16px 24px',
+                borderBottom: '1px solid #E2E8F0',
+                background: '#F8FAFC'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <FileText size={18} color="#4F46E5" />
+                <span style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0F172A' }}>
+                  Past Session Mistake Analysis
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedTestForReview(null)}
+                style={{
+                  background: '#FFFFFF',
+                  border: '1px solid #CBD5E1',
+                  borderRadius: '50%',
+                  width: '32px',
+                  height: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: '#64748B'
+                }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Render ReviewMistakesView */}
+            <div style={{ padding: '12px' }}>
+              <ReviewMistakesView
+                sessionData={{
+                  ...selectedTestForReview,
+                  promptText: selectedTestForReview.prompt_text || selectedTestForReview.promptText || 'The quick brown fox jumps over the lazy dog.',
+                  typedInput: selectedTestForReview.typed_input || selectedTestForReview.typedInput || '',
+                  timestamp: selectedTestForReview.created_at || selectedTestForReview.date,
+                  formattedDate: selectedTestForReview.date
+                }}
+                onNavigate={(v) => {
+                  setSelectedTestForReview(null);
+                  if (onNavigate) onNavigate(v);
+                }}
+                onRetryTest={() => {
+                  setSelectedTestForReview(null);
+                  if (onNavigate) onNavigate('typing-test');
+                }}
+                onPracticeMistakes={() => {
+                  setSelectedTestForReview(null);
+                  if (onNavigate) onNavigate('typing-test');
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

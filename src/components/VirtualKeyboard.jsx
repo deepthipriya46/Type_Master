@@ -144,7 +144,9 @@ export default function VirtualKeyboard({
   let needsShift = false;
 
   if (targetChar) {
-    if (targetChar === ' ') {
+    if (targetChar === '\n') {
+      targetBaseKey = 'enter';
+    } else if (targetChar === ' ') {
       targetBaseKey = ' ';
     } else {
       for (const row of KEYBOARD_LAYOUT) {

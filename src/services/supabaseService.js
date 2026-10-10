@@ -5,7 +5,6 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { AntiCheatService } from './antiCheatService.js';
-import { getPassageForDuration } from '../utils/pdfTextLoader.js';
 
 // Real typing prompts for practice and testing
 // Real typing prompts for practice and testing across diverse categories & difficulties
@@ -350,6 +349,7 @@ const DEFAULT_ACHIEVEMENTS = [
 // Clean User Template - All metrics starting at 0
 const createFreshUser = (id, username, email = '', isPremium = false, role = 'user') => {
   const cleanName = username || 'Typist';
+  const isGuest = Boolean(id?.startsWith('guest_') || !email);
   return {
     id: id || `user_${Date.now()}`,
     username: cleanName,
@@ -364,6 +364,7 @@ const createFreshUser = (id, username, email = '', isPremium = false, role = 'us
     accuracy: 0,
     tests_completed: 0,
     is_premium: Boolean(isPremium),
+    isGuest: isGuest,
     created_at: new Date().toISOString()
   };
 };
@@ -833,24 +834,23 @@ class SupabaseService {
   }
 
   async signIn(emailOrUsername, password) {
-    const input = emailOrUsername.trim().toLowerCase();
+    const input = (emailOrUsername || '').trim().toLowerCase();
 
-    // 1. If live Supabase configured
+    // 1. If live Supabase configured, attempt Supabase Auth first
     if (this.isConfigured()) {
       try {
         const signInPromise = this.supabase.auth.signInWithPassword({
           email: input,
           password: password
         });
-        const { data, error } = await this._withTimeout(signInPromise, 6000);
+        const { data, error } = await this._withTimeout(signInPromise, 4000);
 
         if (!error && data?.user) {
-          // REQUIREMENT 5: Fetch exact profile row corresponding strictly to session.user.id
           let profile = null;
           try {
             const profileRes = await this._withTimeout(
               this.supabase.from('profiles').select('*').eq('id', data.user.id).single(),
-              4000
+              3000
             );
             if (!profileRes.error && profileRes.data) {
               profile = profileRes.data;
@@ -863,7 +863,7 @@ class SupabaseService {
             try {
               const userRes = await this._withTimeout(
                 this.supabase.from('users').select('*').eq('id', data.user.id).single(),
-                4000
+                3000
               );
               profile = userRes?.data;
             } catch (e) {
@@ -884,102 +884,84 @@ class SupabaseService {
 
           this.setCurrentUser(activeUser);
           return { success: true, user: activeUser };
-        } else if (error) {
-          const errMsg = error.message || '';
-
-          // If Email not confirmed or rate limit, allow direct access if user exists in database
-          if (errMsg.toLowerCase().includes('email not confirmed') || errMsg.toLowerCase().includes('rate limit')) {
-            try {
-              let { data: dbProfile } = await this._withTimeout(
-                this.supabase.from('profiles').select('*').eq('email', input).maybeSingle(),
-                4000
-              );
-              if (!dbProfile) {
-                const { data: dbUser } = await this._withTimeout(
-                  this.supabase.from('users').select('*').eq('email', input).maybeSingle(),
-                  4000
-                );
-                dbProfile = dbUser;
-              }
-              if (dbProfile) {
-                const mapped = {
-                  ...dbProfile,
-                  displayName: dbProfile.display_name || dbProfile.username || 'Typist',
-                  display_name: dbProfile.display_name || dbProfile.username || 'Typist'
-                };
-                this.setCurrentUser(mapped);
-                return { success: true, user: mapped };
-              }
-            } catch (e) {
-              console.warn('DB user lookup fallback note:', e);
-            }
-
-            // Also check local registry
-            const accounts = this._getLocal('users_registry', []);
-            const userFound = accounts.find(a => (a.email && a.email.toLowerCase() === input));
-            if (userFound) {
-              const { password: _, ...safeUser } = userFound;
-              const mapped = {
-                ...safeUser,
-                displayName: safeUser.display_name || safeUser.username || 'Typist',
-                display_name: safeUser.display_name || safeUser.username || 'Typist'
-              };
-              this.setCurrentUser(mapped);
-              return { success: true, user: mapped };
-            }
-          }
-
-          if (errMsg.toLowerCase().includes('fetch') || errMsg.toLowerCase().includes('network') || errMsg.toLowerCase().includes('timeout')) {
-            return {
-              success: false,
-              message: 'Failed to reach Supabase. Check your Project URL or if the project is paused in Supabase Dashboard.'
-            };
-          }
-          if (!error.message.includes('Invalid login credentials')) {
-            return { success: false, message: error.message };
-          }
         }
       } catch (err) {
-        console.warn('Supabase signin fallback note:', err);
+        console.warn('Supabase signin attempt note:', err);
       }
     }
 
-    // 2. Local Authentication Engine
+    // 2. Local Authentication Engine (handles master admin & local accounts)
+    this.ensureDefaultAdmin();
     const accounts = this._getLocal('users_registry', []);
     const userFound = accounts.find(
       a => (a.email && a.email.toLowerCase() === input) ||
            (a.username && a.username.toLowerCase() === input)
     );
 
-    if (!userFound) {
-      return { success: false, message: 'Account not found. Please register or enter valid credentials.' };
+    if (userFound) {
+      if (userFound.password && userFound.password !== password) {
+        return { success: false, message: 'Incorrect password. Please try again.' };
+      }
+
+      const { password: _, ...safeUser } = userFound;
+      if (safeUser.email === 'admin@typemaster.com' || safeUser.username === 'Admin Administrator') {
+        safeUser.role = 'admin';
+      } else if (!safeUser.role) {
+        safeUser.role = 'user';
+      }
+      const resolvedName = safeUser.display_name || safeUser.username || 'Typist';
+      const activeUser = {
+        ...safeUser,
+        displayName: resolvedName,
+        display_name: resolvedName
+      };
+      this.setCurrentUser(activeUser);
+      return { success: true, user: activeUser };
     }
 
-    if (userFound.password && userFound.password !== password) {
-      return { success: false, message: 'Incorrect password. Please try again.' };
+    // 3. Built-in Master Admin fallback (admin@typemaster.com / admin123)
+    if ((input === 'admin@typemaster.com' || input === 'admin') && password === 'admin123') {
+      const masterAdmin = {
+        id: 'admin_master_01',
+        username: 'Admin Administrator',
+        displayName: 'Admin Administrator',
+        display_name: 'Admin Administrator',
+        email: 'admin@typemaster.com',
+        role: 'admin',
+        status: 'Active',
+        avatar_url: 'https://api.dicebear.com/7.x/initials/svg?seed=Admin',
+        best_wpm: 0,
+        avg_wpm: 0,
+        accuracy: 0,
+        tests_completed: 0,
+        is_premium: true,
+        created_at: new Date().toISOString()
+      };
+      this.setCurrentUser(masterAdmin);
+      return { success: true, user: masterAdmin };
     }
 
-    const { password: _, ...safeUser } = userFound;
-    if (safeUser.email === 'admin@typemaster.com' || safeUser.username === 'Admin Administrator') {
-      safeUser.role = 'admin';
-    } else if (!safeUser.role) {
-      safeUser.role = 'user';
-    }
-    const resolvedName = safeUser.display_name || safeUser.username || 'Typist';
-    const activeUser = {
-      ...safeUser,
-      displayName: resolvedName,
-      display_name: resolvedName
-    };
-    this.setCurrentUser(activeUser);
+    return { success: false, message: 'Invalid credentials. Please verify your email/username and password.' };
     return { success: true, user: activeUser };
   }
 
   async signInGuest(name = '') {
+    // 1. Purge any lingering Supabase auth session from previous logins
+    if (this.isConfigured()) {
+      try {
+        await this.supabase.auth.signOut();
+      } catch (err) {
+        console.warn('Guest signout note:', err);
+      }
+    }
+
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const cleanName = (name || '').trim() || `Typist_${randomSuffix}`;
     const guestId = `guest_${Date.now()}_${randomSuffix}`;
-    const guestUser = createFreshUser(guestId, cleanName, '');
+    const guestUser = {
+      ...createFreshUser(guestId, cleanName, ''),
+      isGuest: true
+    };
 
     this.setCurrentUser(guestUser);
     this._initUserData(guestId, guestUser);
@@ -1017,6 +999,36 @@ class SupabaseService {
       }
     }
     this.setCurrentUser(null);
+  }
+
+  async signInWithOAuth(provider = 'google') {
+    if (this.isConfigured()) {
+      try {
+        const { data, error } = await this.supabase.auth.signInWithOAuth({
+          provider: provider,
+          options: {
+            redirectTo: window.location.origin
+          }
+        });
+        if (error) throw error;
+        return { success: true, data };
+      } catch (err) {
+        console.warn('OAuth signIn note, using fallback:', err.message);
+      }
+    }
+    // Simulation / local fallback for Google Typist
+    const mockUser = {
+      id: `google_${Date.now()}`,
+      username: 'Google Typist',
+      displayName: 'Google Typist',
+      email: 'user@gmail.com',
+      avatar_url: 'https://api.dicebear.com/7.x/initials/svg?seed=GoogleTypist',
+      role: 'user',
+      is_premium: false
+    };
+    this.setCurrentUser(mockUser);
+    sessionStorage.setItem('typemaster_session_authenticated', 'true');
+    return { success: true, user: mockUser };
   }
 
   _initUserData(userId, userObj) {
@@ -1072,7 +1084,10 @@ class SupabaseService {
     this._setLocal(`test_logs_${currentUser.id}`, []);
     if (this.isConfigured()) {
       try {
-        await this.supabase.from('test_logs').delete().eq('user_id', currentUser.id);
+        await Promise.all([
+          this.supabase.from('test_logs').delete().eq('user_id', currentUser.id),
+          this.supabase.from('test_sessions').delete().eq('user_id', currentUser.id)
+        ]);
       } catch (e) {
         console.warn('Supabase clear logs note:', e);
       }
@@ -1130,22 +1145,36 @@ class SupabaseService {
       }
     }
 
-    // Use parsed PDF word bank repository for dynamic Random Text passages
-    if (!category || category === 'Random Text' || category === 'All') {
-      const pdfText = getPassageForDuration(duration, excludeText);
-      if (pdfText) {
-        return {
-          success: true,
-          prompt: {
-            id: `pdf_prompt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            category: 'Random Text',
-            difficulty,
-            text: pdfText,
-            word_count: pdfText.split(/\s+/).length
-          },
-          source: 'pdf_repository'
-        };
+    // Try backend dynamic generation endpoint first for rich variety
+    try {
+      const apiRes = await fetch('/api/typing/generate-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: category || 'Random Text',
+          difficulty: difficulty || 'Medium',
+          language: 'C',
+          durationSeconds: typeof duration === 'number' ? duration : 60
+        })
+      });
+      if (apiRes.ok) {
+        const genData = await apiRes.json();
+        if (genData.success && genData.text) {
+          return {
+            success: true,
+            prompt: {
+              id: `gen_${Date.now()}`,
+              category: genData.category,
+              difficulty: genData.difficulty,
+              text: genData.text,
+              word_count: genData.text.split(/\s+/).length
+            },
+            source: genData.source || 'gemini_api'
+          };
+        }
       }
+    } catch {
+      // Endpoint fallback to local prompts pool
     }
 
     // Local prompts pool filtered by category, difficulty, and targetDuration
@@ -1303,6 +1332,20 @@ class SupabaseService {
       difficulty = 'Easy'
     } = payload;
 
+    // Idempotency: Prevent duplicate submissions within 3.5 seconds with identical metrics
+    const nowMs = Date.now();
+    if (
+      this._lastSubmission &&
+      nowMs - this._lastSubmission.time < 3500 &&
+      this._lastSubmission.userId === userId &&
+      this._lastSubmission.wpm === Math.round(wpm) &&
+      this._lastSubmission.errors === errors &&
+      this._lastSubmission.characters === characters
+    ) {
+      console.warn('[SupabaseService] Duplicate test submission ignored within debounce window');
+      return this._lastSubmission.result;
+    }
+
     const now = new Date();
     const dateFormatted = now.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
 
@@ -1321,12 +1364,20 @@ class SupabaseService {
       difficulty,
       result: resultBadge,
       is_valid: isValid,
+      prompt_text: payload.promptText || '',
+      typed_input: payload.typedInput || '',
+      mistake_details: payload.mistakeDetails || payload.mistake_details || [],
+      mistake_stats: payload.mistakeStats || payload.mistake_stats || null,
       created_at: now.toISOString()
     };
 
-    // 2. Append new test log to local store
+    // 2. Append new test log to local store (with duplicate prevention)
     const existingLogs = this._getLocal(`test_logs_${userId}`, []);
-    const updatedLogs = [newLog, ...existingLogs];
+    const alreadyExists = existingLogs.some(l =>
+      l.id === newLog.id ||
+      (Math.abs(new Date(l.created_at || 0).getTime() - now.getTime()) < 4000 && l.wpm === newLog.wpm && l.errors === newLog.errors)
+    );
+    const updatedLogs = alreadyExists ? existingLogs : [newLog, ...existingLogs];
     this._setLocal(`test_logs_${userId}`, updatedLogs);
 
     // 3. Recalculate User Stats dynamically in real time
@@ -1466,6 +1517,9 @@ class SupabaseService {
             difficulty,
             result_badge: resultBadge,
             is_valid: isValid,
+            mistake_details: payload.mistakeDetails || payload.mistake_details || [],
+            prompt_text: payload.promptText || '',
+            typed_input: payload.typedInput || '',
             created_at: now.toISOString()
           }]), 4000);
         } catch (e) {
@@ -1486,6 +1540,9 @@ class SupabaseService {
             difficulty,
             result_badge: resultBadge,
             is_valid: isValid,
+            mistake_details: payload.mistakeDetails || payload.mistake_details || [],
+            prompt_text: payload.promptText || '',
+            typed_input: payload.typedInput || '',
             created_at: now.toISOString()
           }]), 4000);
         } catch (e) {
@@ -1503,7 +1560,7 @@ class SupabaseService {
       userEmail: updatedUser.email || ''
     });
 
-    return {
+    const fullSessionResult = {
       success: true,
       valid: isValid,
       badge: resultBadge,
@@ -1521,6 +1578,17 @@ class SupabaseService {
         currentStreak: newStreak
       }
     };
+
+    this._lastSubmission = {
+      time: nowMs,
+      userId,
+      wpm: newLog.wpm,
+      errors: newLog.errors,
+      characters: newLog.characters,
+      result: fullSessionResult
+    };
+
+    return fullSessionResult;
   }
 
   // Real-time Leaderboard updater
@@ -1564,18 +1632,46 @@ class SupabaseService {
 
     const userId = currentUser.id;
     const rawLocalLogs = this._getLocal(`test_logs_${userId}`, []);
-    // Sanitize any previously saved logs where legitimate typing (e.g. 12 WPM, 100% acc) was tagged as Invalid
-    const localLogs = rawLocalLogs.map(l => {
+
+    // Helper to determine if two test log records represent the exact same session
+    const isDuplicateLog = (a, b) => {
+      if (!a || !b) return false;
+      if (a.id && b.id && a.id === b.id) return true;
+      if (a.created_at && b.created_at) {
+        const diff = Math.abs(new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        if (diff < 5000 && a.wpm === b.wpm && a.errors === b.errors) return true;
+      }
+      const sameDate = a.date === b.date;
+      if (
+        sameDate &&
+        a.wpm === b.wpm &&
+        Math.round(a.accuracy) === Math.round(b.accuracy) &&
+        a.errors === b.errors &&
+        (a.duration === b.duration || a.durationSeconds === b.durationSeconds)
+      ) {
+        return true;
+      }
+      return false;
+    };
+
+    // Sanitize and deduplicate local logs
+    const deduplicatedLocalLogs = [];
+    for (const rawL of rawLocalLogs) {
+      let l = { ...rawL };
       if ((l.result === 'Invalid' || l.result === 'Flagged') && (l.characters > 0 || l.wpm > 0) && l.wpm <= 250) {
         const fixedBadge = (l.wpm < 15 && l.accuracy >= 80) ? 'Fair' : (l.accuracy >= 75 ? 'Fair' : 'Needs Practice');
-        return { ...l, result: fixedBadge, is_valid: true };
+        l = { ...l, result: fixedBadge, is_valid: true };
       }
-      return l;
-    });
-    // Persist sanitized logs if any were repaired
-    if (JSON.stringify(rawLocalLogs) !== JSON.stringify(localLogs)) {
-      this._setLocal(`test_logs_${userId}`, localLogs);
+      if (!deduplicatedLocalLogs.some(existing => isDuplicateLog(existing, l))) {
+        deduplicatedLocalLogs.push(l);
+      }
     }
+
+    // Persist sanitized and deduplicated logs if any duplicates or invalid badges were repaired
+    if (deduplicatedLocalLogs.length !== rawLocalLogs.length || JSON.stringify(rawLocalLogs) !== JSON.stringify(deduplicatedLocalLogs)) {
+      this._setLocal(`test_logs_${userId}`, deduplicatedLocalLogs);
+    }
+    const localLogs = deduplicatedLocalLogs;
 
     // 1. Supabase live fetch if configured
     if (this.isConfigured()) {
@@ -1608,17 +1704,18 @@ class SupabaseService {
               accuracy: Math.round(l.accuracy * 10) / 10,
               errors: l.errors,
               characters: l.characters,
-              result: resBadge
+              result: resBadge,
+              created_at: l.created_at
             };
           });
 
-          // Merge Supabase logs with local logs so no tests are ever lost
-          const logMap = new Map();
-          formattedRecent.forEach(l => logMap.set(l.id, l));
-          localLogs.forEach(l => {
-            if (!logMap.has(l.id)) logMap.set(l.id, l);
+          // Merge Supabase logs with local logs WITHOUT duplicating entries
+          const mergedRecent = [...formattedRecent];
+          localLogs.forEach(loc => {
+            if (!mergedRecent.some(rem => isDuplicateLog(rem, loc))) {
+              mergedRecent.push(loc);
+            }
           });
-          const mergedRecent = Array.from(logMap.values());
 
           const chronological = [...mergedRecent].reverse().slice(-7);
           const performanceGraph = chronological.map(l => ({
@@ -1772,65 +1869,545 @@ class SupabaseService {
   // ==========================================================
   // FEEDBACK ENGINE: LIVE DATABASE & TELEMETRY
   // ==========================================================
-  async submitFeedback({ userId, rating, comment, userName = '', userEmail = '' }) {
+  async submitFeedback({ userId, rating, comment, userName = '', userEmail = '', category = 'General Feedback', subject = '', message = '', attachmentUrl = null }) {
+    const activeUser = this.getCurrentUser();
+    const effectiveUserId = userId || activeUser?.id || 'anonymous';
+    const effectiveUserName = userName || activeUser?.username || activeUser?.displayName || 'Typist';
+    const effectiveUserEmail = userEmail || activeUser?.email || '';
+
+    const cleanMessage = (message || comment || '').trim();
+    const cleanSubject = (subject || '').trim() || cleanMessage.slice(0, 40) || 'General Feedback';
+    const cleanCategory = category || 'General Feedback';
+    const parsedRating = rating ? Number(rating) : null;
+
     const now = new Date();
     const fbRecord = {
       id: `fb_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`,
-      user_id: userId || 'anonymous',
-      userName: userName || 'Typist',
-      userEmail: userEmail || '',
-      rating: Number(rating) || 5,
-      comment: (comment || '').trim(),
-      category: 'User Experience',
+      user_id: effectiveUserId,
+      userName: effectiveUserName,
+      userEmail: effectiveUserEmail,
+      category: cleanCategory,
+      subject: cleanSubject,
+      message: cleanMessage,
+      comment: cleanMessage, // backwards compatibility
+      rating: parsedRating,
       status: 'Pending',
-      date: now.toLocaleString(),
+      admin_response: null,
+      adminReply: null,
+      attachment_url: attachmentUrl || null,
+      date: now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
       created_at: now.toISOString()
     };
 
     // 1. Supabase feedback table insert
     if (this.isConfigured()) {
       try {
-        await this._withTimeout(
+        const { data, error } = await this._withTimeout(
           this.supabase.from('feedback').insert([{
             user_id: fbRecord.user_id,
-            rating: fbRecord.rating,
+            category: fbRecord.category,
+            subject: fbRecord.subject,
+            message: fbRecord.message,
             comment: fbRecord.comment,
+            rating: fbRecord.rating,
+            status: fbRecord.status,
+            admin_response: fbRecord.admin_response,
+            attachment_url: fbRecord.attachment_url,
             created_at: fbRecord.created_at
-          }]),
+          }]).select().maybeSingle(),
           4000
         );
+        if (error) {
+          console.warn('Extended feedback insert note, falling back to core columns:', error.message);
+          const fallbackRes = await this._withTimeout(
+            this.supabase.from('feedback').insert([{
+              user_id: fbRecord.user_id,
+              rating: fbRecord.rating || 5,
+              comment: `${fbRecord.subject}: ${fbRecord.message}`,
+              created_at: fbRecord.created_at
+            }]).select().maybeSingle(),
+            4000
+          );
+          if (fallbackRes?.data?.id) {
+            fbRecord.id = fallbackRes.data.id;
+          }
+        } else if (data?.id) {
+          fbRecord.id = data.id;
+        }
       } catch (err) {
         console.warn('Supabase feedback insert note:', err);
       }
     }
 
-    // 2. Local feedback storage sync so Admin Portal receives it immediately
+    // 2. User local feedback store
+    const userFeedbacks = this._getLocal(`user_feedback_${effectiveUserId}`, []);
+    userFeedbacks.unshift(fbRecord);
+    this._setLocal(`user_feedback_${effectiveUserId}`, userFeedbacks);
+
+    // 3. Local feedback storage sync so Admin Portal receives it immediately
     const localFeedbacks = this._getLocal('admin_feedback', []);
     localFeedbacks.unshift(fbRecord);
     this._setLocal('admin_feedback', localFeedbacks);
 
-    // 3. Realtime Broadcast to Admin Portal (admin-live-feed)
+    // 4. Realtime Broadcast to Admin Portal (admin-live-feed)
     this.broadcastToAdminFeed('FEEDBACK_SUBMITTED', fbRecord);
+
+    // 5. In-window & cross-tab sync
+    try {
+      window.dispatchEvent(new CustomEvent('typemaster-feedback-sync', { detail: fbRecord }));
+      const bc = new BroadcastChannel('user-feedback-sync');
+      bc.postMessage({ type: 'FEEDBACK_SUBMITTED', payload: fbRecord });
+      bc.close();
+    } catch {
+      // Broadcast fallback
+    }
 
     return { success: true, feedback: fbRecord };
   }
 
+  async fetchUserFeedbackLive(userId) {
+    if (!userId) return [];
+
+    // 1. Live Supabase fetch strictly filtered by authenticated user's ID
+    if (this.isConfigured()) {
+      try {
+        const { data, error } = await this._withTimeout(
+          this.supabase
+            .from('feedback')
+            .select('*')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false }),
+          4000
+        );
+
+        if (!error && Array.isArray(data)) {
+          const liveRecords = data.map(d => ({
+            id: d.id,
+            user_id: d.user_id,
+            category: d.category || 'General Feedback',
+            subject: d.subject || (d.comment ? d.comment.slice(0, 35) : 'Feedback'),
+            message: d.message || d.comment || '',
+            comment: d.comment || d.message || '',
+            rating: d.rating || null,
+            status: d.status || 'Pending',
+            admin_response: d.admin_response || d.adminReply || null,
+            attachment_url: d.attachment_url || null,
+            created_at: d.created_at,
+            date: d.created_at ? new Date(d.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Recent'
+          }));
+
+          // Merge with any local user records
+          const local = this._getLocal(`user_feedback_${userId}`, []);
+          const map = new Map();
+          liveRecords.forEach(r => map.set(r.id, r));
+          local.forEach(r => {
+            if (!map.has(r.id)) map.set(r.id, r);
+          });
+          const merged = Array.from(map.values()).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+          this._setLocal(`user_feedback_${userId}`, merged);
+          return merged;
+        }
+      } catch (err) {
+        console.warn('Live user feedback fetch note:', err);
+      }
+    }
+
+    return this._getLocal(`user_feedback_${userId}`, []);
+  }
+
+  subscribeToUserFeedback(userId, callback) {
+    if (!userId || !callback) return () => {};
+
+    let channel = null;
+    if (this.isConfigured()) {
+      try {
+        channel = this.supabase
+          .channel(`user-feedback-${userId}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'feedback', filter: `user_id=eq.${userId}` },
+            (payload) => {
+              callback(payload);
+            }
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('Feedback realtime subscription note:', err);
+      }
+    }
+
+    // In-window event listener
+    const handleLocalSync = (e) => {
+      if (e.detail?.user_id === userId) {
+        callback({ eventType: 'INSERT', new: e.detail });
+      }
+    };
+    window.addEventListener('typemaster-feedback-sync', handleLocalSync);
+
+    // Cross-tab broadcast listener
+    let bc = null;
+    try {
+      bc = new BroadcastChannel('user-feedback-sync');
+      bc.onmessage = (event) => {
+        if (event.data?.payload?.user_id === userId) {
+          callback({ eventType: 'INSERT', new: event.data.payload });
+        }
+      };
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      if (channel && this.isConfigured()) {
+        this.supabase.removeChannel(channel);
+      }
+      window.removeEventListener('typemaster-feedback-sync', handleLocalSync);
+      if (bc) bc.close();
+    };
+  }
+
+  async uploadFeedbackAttachment(file, userId) {
+    if (!file) return null;
+
+    if (file.size > 5 * 1024 * 1024) {
+      throw new Error('Screenshot must be 5MB or smaller.');
+    }
+
+    // Attempt Supabase storage upload if available
+    if (this.isConfigured() && this.supabase?.storage) {
+      try {
+        const fileExt = file.name.split('.').pop() || 'png';
+        const fileName = `${userId || 'guest'}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${fileExt}`;
+        const filePath = `screenshots/${fileName}`;
+
+        const { error: uploadError } = await this.supabase.storage
+          .from('feedback-attachments')
+          .upload(filePath, file, { cacheControl: '3600', upsert: true });
+
+        if (!uploadError) {
+          const { data: { publicUrl } } = this.supabase.storage
+            .from('feedback-attachments')
+            .getPublicUrl(filePath);
+          if (publicUrl) return publicUrl;
+        }
+      } catch (err) {
+        console.warn('Storage bucket upload fallback:', err);
+      }
+    }
+
+    // Fallback: Convert to Base64 data URL
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  _isSampleFeedback(fb) {
+    if (!fb) return true;
+    const sampleIds = ['fb_001', 'fb_002', 'fb_003', 'fb_004', 'fb_005'];
+    const sampleEmails = ['priya@gmail.com', 'rahulv@gmail.com', 'sneha@gmail.com', 'arjun@gmail.com', 'neha@gmail.com'];
+    const sampleNames = ['Priya Sharma', 'Rahul Verma', 'Sneha Reddy', 'Arjun Kumar', 'Neha Patel'];
+    if (sampleIds.includes(fb.id)) return true;
+    const email = (fb.userEmail || fb.user_email || '').toLowerCase();
+    if (sampleEmails.includes(email)) return true;
+    const name = fb.userName || fb.user_name || '';
+    if (sampleNames.includes(name)) return true;
+    return false;
+  }
+
   async fetchFeedbackLive() {
+    let list = [];
     if (this.isConfigured()) {
       try {
         const { data, error } = await this._withTimeout(
           this.supabase.from('feedback').select('*').order('created_at', { ascending: false }),
           4000
         );
-        if (!error && data && data.length > 0) {
-          return data;
+        if (!error && Array.isArray(data)) {
+          list = data.map(d => ({
+            id: d.id,
+            userId: d.user_id,
+            user_id: d.user_id,
+            userName: d.user_name || d.userName || 'Registered Typist',
+            userEmail: d.user_email || d.userEmail || '',
+            rating: d.rating || null,
+            category: d.category || 'General Feedback',
+            subject: d.subject || (d.comment ? d.comment.slice(0, 35) : 'Feedback'),
+            message: d.message || d.comment || '',
+            comment: d.comment || d.message || '',
+            status: d.status || 'Pending',
+            admin_response: d.admin_response || d.adminReply || null,
+            adminReply: d.admin_response || d.adminReply || null,
+            attachment_url: d.attachment_url || null,
+            created_at: d.created_at,
+            date: d.created_at ? new Date(d.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Recent'
+          }));
         }
       } catch (err) {
         console.warn('Supabase live feedback fetch note:', err);
       }
     }
-    return this._getLocal('admin_feedback', []);
+
+    // Merge with local feedback store, strictly filtering out sample items
+    const local = this._getLocal('admin_feedback', []);
+    const cleanLocal = local.filter(fb => !this._isSampleFeedback(fb));
+    if (cleanLocal.length !== local.length) {
+      this._setLocal('admin_feedback', cleanLocal);
+    }
+
+    const map = new Map();
+    list.forEach(item => {
+      if (!this._isSampleFeedback(item)) map.set(item.id, item);
+    });
+    cleanLocal.forEach(item => {
+      if (!this._isSampleFeedback(item) && !map.has(item.id)) {
+        map.set(item.id, item);
+      }
+    });
+
+    const combined = Array.from(map.values()).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    return combined;
   }
+
+  async respondToFeedback(id, { adminResponse, status = 'Resolved' }) {
+    const updatedAt = new Date().toISOString();
+
+    // 1. Update in Supabase
+    let updatedDbRecord = null;
+    if (this.isConfigured()) {
+      try {
+        const { data, error } = await this._withTimeout(
+          this.supabase
+            .from('feedback')
+            .update({
+              admin_response: adminResponse,
+              status: status,
+              updated_at: updatedAt
+            })
+            .eq('id', id)
+            .select()
+            .maybeSingle(),
+          4000
+        );
+        if (!error && data) {
+          updatedDbRecord = data;
+        } else if (error) {
+          console.warn('Supabase feedback update note:', error.message);
+          await this._withTimeout(
+            this.supabase
+              .from('feedback')
+              .update({
+                status: status
+              })
+              .eq('id', id),
+            3000
+          );
+        }
+      } catch (err) {
+        console.warn('Supabase feedback update error:', err);
+      }
+    }
+
+    // 2. Update in admin_feedback localStorage
+    let adminFeedbacks = this._getLocal('admin_feedback', []);
+    let targetItem = null;
+    adminFeedbacks = adminFeedbacks.map(f => {
+      if (f.id === id) {
+        targetItem = {
+          ...f,
+          admin_response: adminResponse,
+          adminReply: adminResponse,
+          status: status,
+          updated_at: updatedAt
+        };
+        return targetItem;
+      }
+      return f;
+    });
+
+    if (!targetItem && updatedDbRecord) {
+      targetItem = {
+        ...updatedDbRecord,
+        admin_response: adminResponse,
+        adminReply: adminResponse,
+        status: status,
+        updated_at: updatedAt
+      };
+      adminFeedbacks.unshift(targetItem);
+    }
+    this._setLocal('admin_feedback', adminFeedbacks);
+
+    // 3. Update across user-specific local stores (user_feedback_*)
+    const targetUserId = targetItem?.user_id || targetItem?.userId;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('user_feedback_')) {
+          let uList = this._getLocal(key, []);
+          let changed = false;
+          uList = uList.map(item => {
+            if (item.id === id) {
+              changed = true;
+              return {
+                ...item,
+                admin_response: adminResponse,
+                adminReply: adminResponse,
+                status: status,
+                updated_at: updatedAt
+              };
+            }
+            return item;
+          });
+          if (changed) {
+            this._setLocal(key, uList);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 4. Dispatch Realtime Broadcast to both portals
+    const payload = targetItem || {
+      id,
+      admin_response: adminResponse,
+      adminReply: adminResponse,
+      status,
+      user_id: targetUserId,
+      updated_at: updatedAt
+    };
+
+    this.broadcastToAdminFeed('FEEDBACK_UPDATED', payload);
+
+    try {
+      window.dispatchEvent(new CustomEvent('typemaster-feedback-sync', { detail: payload }));
+      window.dispatchEvent(new CustomEvent('typemaster-admin-feedback-sync', { detail: payload }));
+      const bc = new BroadcastChannel('user-feedback-sync');
+      bc.postMessage({ type: 'FEEDBACK_UPDATED', payload });
+      bc.close();
+    } catch {
+      // Broadcast fallback
+    }
+
+    return { success: true, item: targetItem };
+  }
+
+  async deleteFeedback(id) {
+    // 1. Delete from Supabase
+    if (this.isConfigured()) {
+      try {
+        await this._withTimeout(
+          this.supabase.from('feedback').delete().eq('id', id),
+          4000
+        );
+      } catch (err) {
+        console.warn('Supabase feedback delete note:', err);
+      }
+    }
+
+    // 2. Delete from admin_feedback
+    let adminFeedbacks = this._getLocal('admin_feedback', []);
+    const target = adminFeedbacks.find(f => f.id === id);
+    adminFeedbacks = adminFeedbacks.filter(f => f.id !== id);
+    this._setLocal('admin_feedback', adminFeedbacks);
+
+    // 3. Delete across user_feedback_* stores
+    const targetUserId = target?.user_id || target?.userId;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('user_feedback_')) {
+          let uList = this._getLocal(key, []);
+          const filtered = uList.filter(item => item.id !== id);
+          if (filtered.length !== uList.length) {
+            this._setLocal(key, filtered);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 4. Realtime broadcast
+    const payload = { id, deleted: true, user_id: targetUserId };
+    this.broadcastToAdminFeed('FEEDBACK_DELETED', payload);
+
+    try {
+      window.dispatchEvent(new CustomEvent('typemaster-feedback-sync', { detail: payload }));
+      window.dispatchEvent(new CustomEvent('typemaster-admin-feedback-sync', { detail: payload }));
+      const bc = new BroadcastChannel('user-feedback-sync');
+      bc.postMessage({ type: 'FEEDBACK_DELETED', payload });
+      bc.close();
+    } catch {
+      // ignore
+    }
+
+    return { success: true };
+  }
+
+  subscribeToAdminFeedback(callback) {
+    if (!callback) return () => {};
+
+    let channel = null;
+    if (this.isConfigured()) {
+      try {
+        channel = this.supabase
+          .channel('admin-feedback-live-channel')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'feedback' },
+            (payload) => {
+              callback(payload);
+            }
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('Admin feedback subscription note:', err);
+      }
+    }
+
+    const handleSync = (e) => {
+      callback({ eventType: 'SYNC', new: e.detail });
+    };
+
+    window.addEventListener('typemaster-feedback-sync', handleSync);
+    window.addEventListener('typemaster-admin-feedback-sync', handleSync);
+
+    let bcUser = null;
+    let bcAdmin = null;
+    try {
+      bcUser = new BroadcastChannel('user-feedback-sync');
+      bcUser.onmessage = (event) => {
+        callback({ eventType: event.data?.type || 'BROADCAST', new: event.data?.payload });
+      };
+    } catch {
+      // ignore
+    }
+
+    try {
+      bcAdmin = new BroadcastChannel('admin-live-feed');
+      bcAdmin.onmessage = (event) => {
+        if (event.data?.type?.startsWith('FEEDBACK_')) {
+          callback({ eventType: event.data.type, new: event.data.payload });
+        }
+      };
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      if (channel && this.isConfigured()) {
+        this.supabase.removeChannel(channel);
+      }
+      window.removeEventListener('typemaster-feedback-sync', handleSync);
+      window.removeEventListener('typemaster-admin-feedback-sync', handleSync);
+      if (bcUser) bcUser.close();
+      if (bcAdmin) bcAdmin.close();
+    };
+  }
+
 
   // ==========================================================
   // MULTI-ADMIN CREATION & RBAC MANAGEMENT

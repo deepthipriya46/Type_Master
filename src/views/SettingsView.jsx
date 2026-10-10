@@ -67,10 +67,10 @@ export default function SettingsView({
   // Sync props when user changes
   useEffect(() => {
     if (user) {
-      if (user.username) setUsername(user.username);
-      if (user.email) setEmail(user.email);
-      if (user.avatar_url) setAvatarUrl(user.avatar_url);
-      if (user.is_premium !== undefined) setIsPremium(Boolean(user.is_premium));
+      setUsername(user.username || user.displayName || 'Typist');
+      setEmail(user.email || '');
+      setAvatarUrl(user.avatar_url || PRESET_AVATARS[0]);
+      setIsPremium(Boolean(user.is_premium));
     }
   }, [user]);
 
@@ -160,9 +160,14 @@ export default function SettingsView({
         {/* ==================================================== */}
         <div className="dashboard-card settings-col-span-2" style={{ padding: '24px' }}>
           <div className="card-header-row" style={{ marginBottom: '18px' }}>
-            <div className="card-title-group">
+            <div className="card-title-group" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <User size={19} color="#2563eb" />
-              <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>Account Profile</h3>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0 }}>Account Profile</h3>
+              {(user?.isGuest || user?.id?.startsWith('guest_')) && (
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: '#FEF3C7', color: '#B45309', border: '1px solid #FDE68A' }}>
+                  Guest Mode
+                </span>
+              )}
             </div>
             {profileSuccess && (
               <span style={{ fontSize: '0.8rem', color: '#10b981', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px' }}>

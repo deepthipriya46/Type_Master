@@ -85,6 +85,14 @@ export function AuthProvider({ children }) {
     let isMounted = true;
 
     const setupAuthListener = async () => {
+      // 1. If currently stored user is a Guest, protect it from being overwritten by stale Supabase sessions
+      const currentStored = supabaseService.getCurrentUser();
+      if (currentStored?.isGuest || currentStored?.id?.startsWith('guest_')) {
+        setUser(currentStored);
+        if (isMounted) setLoading(false);
+        return;
+      }
+
       if (supabaseService.isConfigured()) {
         try {
           // Check existing session
@@ -100,6 +108,12 @@ export function AuthProvider({ children }) {
         const { data: listener } = supabaseService.supabase.auth.onAuthStateChange(
           async (event, session) => {
             if (!isMounted) return;
+
+            // If user is currently a guest typist, do not let Supabase auth events overwrite or nullify the guest
+            const current = supabaseService.getCurrentUser();
+            if (current?.isGuest || current?.id?.startsWith('guest_')) {
+              return;
+            }
 
             if (session?.user && (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED')) {
               await fetchExactProfile(session.user.id, session.user.email);
@@ -225,12 +239,27 @@ export function AuthProvider({ children }) {
     };
   }, [user?.id]);
 
+  const refreshProfile = useCallback(async () => {
+    const current = supabaseService.getCurrentUser();
+    if (current?.isGuest || current?.id?.startsWith('guest_')) {
+      setUser(current);
+      return current;
+    }
+    if (user?.id) {
+      return await fetchExactProfile(user.id, user.email);
+    }
+    return null;
+  }, [user?.id, user?.email, fetchExactProfile]);
+
   const login = (newUser) => {
+    if (!newUser) return;
     const displayName = newUser.display_name || newUser.username || 'Typist';
+    const isGuest = Boolean(newUser.isGuest || newUser.id?.startsWith('guest_') || !newUser.email);
     const mapped = {
       ...newUser,
       displayName,
       display_name: displayName,
+      isGuest,
       is_premium: Boolean(newUser.is_premium)
     };
     setUser(mapped);
@@ -264,7 +293,8 @@ export function AuthProvider({ children }) {
         login,
         logout,
         updateUserState,
-        fetchExactProfile
+        fetchExactProfile,
+        refreshProfile
       }}
     >
       {children}

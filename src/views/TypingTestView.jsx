@@ -20,8 +20,9 @@ import confetti from 'canvas-confetti';
 import VirtualKeyboard from '../components/VirtualKeyboard';
 import { supabaseService } from '../services/supabaseService';
 import { soundSynth } from '../services/soundSynthesizer';
-import { getPassageForDuration } from '../utils/pdfTextLoader.js';
 import FirstTestFeedbackModal from '../components/FirstTestFeedbackModal';
+import ReviewMistakesView from './ReviewMistakesView';
+import { analyzeSessionMistakes } from '../utils/mistakeAnalyzer';
 
 export default function TypingTestView({
   initialSettings = {},
@@ -31,12 +32,17 @@ export default function TypingTestView({
   const [duration, setDuration] = useState(initialSettings.duration || 60);
   const [difficulty, setDifficulty] = useState(initialSettings.difficulty || 'Easy');
   const [category, setCategory] = useState(initialSettings.category || 'Random Text');
+  const [language, setLanguage] = useState(initialSettings.language || 'C');
 
   const isCustomMode = duration === 'custom' || duration === 0;
 
   const [promptText, setPromptText] = useState('Loading typing prompt...');
-  const [promptSource, setPromptSource] = useState('local');
+  const [promptSource, setPromptSource] = useState('gemini_api');
   const [isLoadingPrompt, setIsLoadingPrompt] = useState(false);
+  const [generationError, setGenerationError] = useState(null);
+
+  const activeRequestIdRef = useRef(0);
+  const abortControllerRef = useRef(null);
 
   // Typing test runtime states
   const [status, setStatus] = useState('idle'); // 'idle', 'running', 'paused', 'finished'
@@ -62,6 +68,10 @@ export default function TypingTestView({
   // First-test feedback modal state
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
 
+  // Completed session review state
+  const [completedSessionData, setCompletedSessionData] = useState(null);
+  const [viewingMistakes, setViewingMistakes] = useState(false);
+
   // Audio settings synchronized with soundSynthesizer
   const [soundEnabled, setSoundEnabled] = useState(() => soundSynth.enabled);
   const [soundType, setSoundType] = useState(() => soundSynth.switchType || 'blue');
@@ -80,80 +90,105 @@ export default function TypingTestView({
   const charCountRef = useRef(0);
   const errorCountRef = useRef(0);
   const finishTestRef = useRef(null);
+  const isFinishingRef = useRef(false);
 
-  // Load Prompt from PDF Word Repository or specialized category
-  const loadPrompt = useCallback(async (cat, diff, prevText = '', dur = duration) => {
-    // If Random Text or default, instantly grab passage from PDF word repository
-    if (!cat || cat === 'Random Text' || cat === 'All') {
-      const passage = getPassageForDuration(dur, prevText);
-      setPromptText(passage);
-      setPromptSource('pdf_repository');
-      return passage;
-    }
-
-    setIsLoadingPrompt(true);
-    try {
-      const res = await supabaseService.fetchPrompt(cat, diff, prevText, dur);
-      if (res && res.prompt && res.prompt.text) {
-        setPromptText(res.prompt.text);
-        setPromptSource(res.source);
-      } else {
-        const passage = getPassageForDuration(dur, prevText);
-        setPromptText(passage);
-        setPromptSource('pdf_repository');
+  // Dynamic Gemini-powered passage generation with request-cancellation & error-handling
+  const fetchDynamicPassage = useCallback(
+    async (cat = category, diff = difficulty, lang = language, dur = duration, exclude = promptText) => {
+      // Cancel previous in-flight request
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
       }
-    } catch (e) {
-      console.warn('Prompt load error, using PDF word repository fallback:', e);
-      const passage = getPassageForDuration(dur, prevText);
-      setPromptText(passage);
-      setPromptSource('pdf_repository');
-    } finally {
-      setIsLoadingPrompt(false);
-    }
-  }, [duration]);
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
 
-  // Complete Fix for "New Text" Button & Dynamic Text Slicing:
-  // Instantly slices a new random chunk from parsed PDF word bank according to active duration
-  // and completely resets typing engine state
+      const reqId = ++activeRequestIdRef.current;
+      setIsLoadingPrompt(true);
+      setGenerationError(null);
+
+      const targetSec = typeof dur === 'number' ? dur : 60;
+
+      try {
+        const response = await fetch('/api/typing/generate-text', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            category: cat,
+            difficulty: diff,
+            language: cat === 'Programming' ? lang : undefined,
+            durationSeconds: targetSec,
+            excludeText: exclude || promptText || ''
+          }),
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          throw new Error(`Generation failed with status ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        // Prevent stale responses if user clicked another control
+        if (activeRequestIdRef.current !== reqId) return;
+
+        if (data.success && data.text) {
+          setPromptText(data.text);
+          setPromptSource(data.source || 'gemini_api');
+          setGenerationError(null);
+
+          // Completely reset typing engine state for the new passage:
+          if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+          setStatus('idle');
+          setTimeLeft(isCustomMode ? 0 : targetSec);
+          setElapsedSeconds(0);
+          setTypedInput('');
+          typedInputRef.current = '';
+          startTimeRef.current = null;
+          elapsedSecondsRef.current = 0;
+          charCountRef.current = 0;
+          errorCountRef.current = 0;
+
+          // Reset visual highlights
+          setLastPressedKey('');
+          setIsLastError(false);
+          setKeyFeedback(null);
+          setLiveWpm(0);
+          setLiveAccuracy(100);
+          setCharCount(0);
+          setErrorCount(0);
+          latestMetricsRef.current = { wpm: 0, accuracy: 100 };
+          setLiveWpmHistory([0]);
+          setLiveAccHistory([100]);
+          keystrokesRef.current = [];
+          setResultModalData(null);
+
+          if (inputRef.current) {
+            inputRef.current.focus();
+          }
+        } else {
+          throw new Error(data.error || 'Unable to generate passage.');
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        console.warn('[TypingTestView] Generation failed, preserving previous passage:', err);
+        if (activeRequestIdRef.current === reqId) {
+          setGenerationError('Unable to generate a new passage. Please try again.');
+        }
+      } finally {
+        if (activeRequestIdRef.current === reqId) {
+          setIsLoadingPrompt(false);
+        }
+      }
+    },
+    [category, difficulty, language, duration, isCustomMode, promptText]
+  );
+
+  // New Text button triggers dynamic category-aware generation
   const handleNewTextClick = useCallback(() => {
-    // 1. Instantly select a new random slice of text from parsed PDF word bank according to duration
-    const newPassage = getPassageForDuration(duration, promptText);
-    setPromptText(newPassage);
-    setPromptSource('pdf_repository');
-
-    // 2. Reset typing engine state completely:
-    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    setStatus('idle');
-    setTimeLeft(isCustomMode ? 0 : (typeof duration === 'number' ? duration : 60));
-    setElapsedSeconds(0);
-    setTypedInput('');
-    typedInputRef.current = '';
-    startTimeRef.current = null;
-    elapsedSecondsRef.current = 0;
-    charCountRef.current = 0;
-    errorCountRef.current = 0;
-
-    // Reset visual highlights on keyboard and errors
-    setLastPressedKey('');
-    setIsLastError(false);
-    setKeyFeedback(null);
-
-    // Reset live WPM, Accuracy, Errors, and Characters counters to 0
-    setLiveWpm(0);
-    setLiveAccuracy(100);
-    setCharCount(0);
-    setErrorCount(0);
-    latestMetricsRef.current = { wpm: 0, accuracy: 100 };
-    setLiveWpmHistory([0]);
-    setLiveAccHistory([100]);
-    keystrokesRef.current = [];
-    setResultModalData(null);
-
-    // Focus typing arena
-    if (inputRef.current) {
-      inputRef.current.focus();
-    }
-  }, [duration, isCustomMode, promptText]);
+    fetchDynamicPassage(category, difficulty, language, duration, promptText);
+  }, [fetchDynamicPassage, category, difficulty, language, duration, promptText]);
 
   useEffect(() => {
     if (initialSettings.customPrompt) {
@@ -162,10 +197,10 @@ export default function TypingTestView({
       if (initialSettings.category) setCategory(initialSettings.category);
       if (initialSettings.difficulty) setDifficulty(initialSettings.difficulty);
     } else {
-      // Slices random text passage from PDF word bank for active duration
-      loadPrompt(category, difficulty, '', duration);
+      fetchDynamicPassage(category, difficulty, language, duration);
     }
-  }, [category, difficulty, duration, initialSettings.customPrompt, loadPrompt]);
+  }, []);
+
 
   // Reset test state
   const resetTest = useCallback((fetchNew = false) => {
@@ -195,7 +230,10 @@ export default function TypingTestView({
     setLiveWpmHistory([0]);
     setLiveAccHistory([100]);
     keystrokesRef.current = [];
+    isFinishingRef.current = false;
     setResultModalData(null);
+    setCompletedSessionData(null);
+    setViewingMistakes(false);
 
     if (inputRef.current) {
       inputRef.current.focus();
@@ -254,7 +292,7 @@ export default function TypingTestView({
 
   // Handle typing input
   const handleInputChange = (e) => {
-    if (status === 'finished') return;
+    if (status === 'finished' || isFinishingRef.current) return;
 
     if (status === 'idle') {
       setStatus('running');
@@ -332,6 +370,8 @@ export default function TypingTestView({
 
   // Submit test to backend
   const finishTest = async (overrideWpm, overrideAcc, overrideErr, overrideChars, overrideDuration) => {
+    if (isFinishingRef.current) return;
+    isFinishingRef.current = true;
     setStatus('finished');
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     soundSynth.playCompleteChime();
@@ -374,7 +414,9 @@ export default function TypingTestView({
       ? overrideWpm
       : (latestMetricsRef.current.wpm > 0 ? latestMetricsRef.current.wpm : accurateWpm);
 
-    const payload = {
+    const mistakeAnalysis = analyzeSessionMistakes(promptText, currentInput);
+    const now = new Date();
+    const sessionPayload = {
       wpm: finalWpm,
       rawWpm: Math.round((currentChars / 5) / (finalDuration / 60)),
       accuracy: finalAccuracy,
@@ -383,14 +425,30 @@ export default function TypingTestView({
       characters: currentChars,
       elapsedSeconds: finalDuration,
       category,
-      difficulty
+      difficulty,
+      promptText,
+      typedInput: currentInput,
+      mistakeDetails: mistakeAnalysis.mistakeWords,
+      mistakeStats: {
+        wrongCount: mistakeAnalysis.wrongCharactersCount,
+        missedCount: mistakeAnalysis.missedCharactersCount,
+        extraCount: mistakeAnalysis.extraCharactersCount,
+        confusionPair: mistakeAnalysis.mostCommonConfusion
+      },
+      timestamp: now.toISOString(),
+      formattedDate: now.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
+      formattedTime: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
     };
 
-    const submissionResult = await supabaseService.submitTest(payload);
-    setResultModalData({
-      ...payload,
+    const submissionResult = await supabaseService.submitTest(sessionPayload);
+    const fullSessionData = {
+      ...sessionPayload,
       ...submissionResult
-    });
+    };
+
+    setCompletedSessionData(fullSessionData);
+    setViewingMistakes(true);
+    setResultModalData(fullSessionData);
 
     // Check First-Test condition for Feedback Modal
     const activeUser = supabaseService.getCurrentUser();
@@ -444,6 +502,43 @@ export default function TypingTestView({
     }
     return items;
   }, [promptText]);
+
+  // Render "Review Your Mistakes" View immediately after test finishes
+  if (status === 'finished' && completedSessionData && viewingMistakes) {
+    return (
+      <div className="page-container" style={{ padding: '0 0 40px 0' }}>
+        <ReviewMistakesView
+          sessionData={completedSessionData}
+          onNavigate={onNavigate}
+          onRetryTest={() => {
+            setViewingMistakes(false);
+            setCompletedSessionData(null);
+            resetTest(false);
+          }}
+          onPracticeMistakes={(missedWords) => {
+            if (!missedWords || missedWords.length === 0) return;
+            const drillPrompt = missedWords.slice(0, 15).join(' ') + ' ' + missedWords.slice(0, 15).join(' ');
+            setPromptText(drillPrompt);
+            setCategory('Mistake Drill');
+            setDifficulty('Targeted Practice');
+            setDuration(60);
+            setViewingMistakes(false);
+            setCompletedSessionData(null);
+            resetTest(false);
+          }}
+        />
+
+        {/* First-Test Feedback Popup Modal */}
+        <FirstTestFeedbackModal
+          isOpen={showFeedbackModal}
+          onClose={() => setShowFeedbackModal(false)}
+          userId={supabaseService.getCurrentUser()?.id}
+          userName={supabaseService.getCurrentUser()?.username || supabaseService.getCurrentUser()?.display_name || 'Typist'}
+          userEmail={supabaseService.getCurrentUser()?.email || ''}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="page-container">
@@ -499,9 +594,7 @@ export default function TypingTestView({
                 setKeyFeedback(null);
                 setLiveWpm(0);
                 setLiveAccuracy(100);
-                const newPassage = getPassageForDuration(item.val, promptText);
-                setPromptText(newPassage);
-                setPromptSource('pdf_repository');
+                fetchDynamicPassage(category, difficulty, language, item.val);
                 if (inputRef.current) inputRef.current.focus();
               }}
               style={duration === item.val ? { background: '#2563eb', color: '#ffffff' } : {}}
@@ -516,30 +609,43 @@ export default function TypingTestView({
           <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155' }}>Difficulty Level</span>
           <button
             className={`pill-btn diff-easy ${difficulty === 'Easy' ? 'active' : ''}`}
-            onClick={() => setDifficulty('Easy')}
+            onClick={() => {
+              setDifficulty('Easy');
+              fetchDynamicPassage(category, 'Easy', language, duration);
+            }}
           >
             Easy
           </button>
           <button
             className={`pill-btn diff-med ${difficulty === 'Medium' ? 'active' : ''}`}
-            onClick={() => setDifficulty('Medium')}
+            onClick={() => {
+              setDifficulty('Medium');
+              fetchDynamicPassage(category, 'Medium', language, duration);
+            }}
           >
             Medium
           </button>
           <button
             className={`pill-btn diff-hard ${difficulty === 'Hard' ? 'active' : ''}`}
-            onClick={() => setDifficulty('Hard')}
+            onClick={() => {
+              setDifficulty('Hard');
+              fetchDynamicPassage(category, 'Hard', language, duration);
+            }}
           >
             Hard
           </button>
         </div>
 
-        {/* Category Dropdown */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {/* Category & Language Dropdown */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155' }}>Text Category</span>
           <select
             value={category}
-            onChange={(e) => setCategory(e.target.value)}
+            onChange={(e) => {
+              const newCat = e.target.value;
+              setCategory(newCat);
+              fetchDynamicPassage(newCat, difficulty, language, duration);
+            }}
             style={{
               padding: '6px 14px',
               borderRadius: '10px',
@@ -559,6 +665,38 @@ export default function TypingTestView({
             <option value="Science & Nature">Science & Nature</option>
           </select>
 
+          {/* Programming Language Selector - Only when category is Programming */}
+          {category === 'Programming' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#3b82f6' }}>Language</span>
+              <select
+                value={language}
+                onChange={(e) => {
+                  const newLang = e.target.value;
+                  setLanguage(newLang);
+                  fetchDynamicPassage('Programming', difficulty, newLang, duration);
+                }}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '10px',
+                  border: '1.5px solid #3b82f6',
+                  fontSize: '0.84rem',
+                  fontWeight: 700,
+                  background: '#eff6ff',
+                  color: '#1d4ed8',
+                  cursor: 'pointer'
+                }}
+                title="Select Programming Language for practice"
+              >
+                <option value="C">C (Default)</option>
+                <option value="Python">Python</option>
+                <option value="Java">Java</option>
+                <option value="JavaScript">JavaScript</option>
+                <option value="C++">C++</option>
+              </select>
+            </div>
+          )}
+
           <button
             onClick={handleNewTextClick}
             disabled={isLoadingPrompt}
@@ -568,19 +706,61 @@ export default function TypingTestView({
               gap: '6px',
               padding: '6px 14px',
               borderRadius: '10px',
-              background: '#eff6ff',
+              background: isLoadingPrompt ? '#f1f5f9' : '#eff6ff',
               border: '1px solid #bfdbfe',
-              color: '#2563eb',
+              color: isLoadingPrompt ? '#94a3b8' : '#2563eb',
               fontSize: '0.82rem',
               fontWeight: 700,
-              cursor: 'pointer'
+              cursor: isLoadingPrompt ? 'not-allowed' : 'pointer',
+              transition: 'all 0.2s'
             }}
-            title="Load a new random text passage from the PDF word repository and reset test"
+            title="Generate a new category-specific passage using Gemini AI"
           >
-            <Sparkles size={14} /> {isLoadingPrompt ? 'Loading...' : 'New Text'}
+            <Sparkles size={14} />
+            {isLoadingPrompt ? 'Generating...' : 'New Text'}
           </button>
         </div>
       </div>
+
+      {/* Clear error notification with Retry button */}
+      {generationError && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            color: '#b91c1c',
+            padding: '10px 18px',
+            borderRadius: '12px',
+            fontSize: '0.86rem',
+            fontWeight: 600,
+            marginTop: '12px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <AlertCircle size={16} />
+            <span>{generationError}</span>
+          </div>
+          <button
+            onClick={() => handleNewTextClick()}
+            style={{
+              background: '#ef4444',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '4px 12px',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              cursor: 'pointer'
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
 
       {/* Main Grid: Left Typing Area + Right Live Stats Panel */}
       <div className="typing-test-layout">
@@ -707,18 +887,35 @@ export default function TypingTestView({
 
           {/* Interactive Text Display Arena */}
           <div
-            className="typing-arena"
+            className={`typing-arena ${category === 'Programming' ? 'programming-mode' : ''}`}
             ref={arenaRef}
             onClick={handleArenaClick}
+            style={
+              category === 'Programming'
+                ? {
+                    whiteSpace: 'pre-wrap',
+                    fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                    lineHeight: '1.7',
+                    tabSize: 4
+                  }
+                : {}
+            }
           >
-            <input
-              type="text"
+            <textarea
               ref={inputRef}
               className="hidden-type-input"
               value={typedInput}
               onChange={handleInputChange}
               onKeyDown={(e) => {
-                if (e.key === 'Backspace') {
+                if (e.key === 'Tab') {
+                  e.preventDefault();
+                  // Match indentation at current position or insert 4 spaces
+                  const remainingPrompt = promptText.slice(typedInput.length);
+                  const indentMatch = remainingPrompt.match(/^(\s{2,4})/);
+                  const insertStr = indentMatch ? indentMatch[1] : '    ';
+                  const nextVal = typedInput + insertStr;
+                  handleInputChange({ target: { value: nextVal } });
+                } else if (e.key === 'Backspace') {
                   soundSynth.playBackspaceSound();
                   setKeyFeedback({
                     key: 'Backspace',
@@ -727,12 +924,83 @@ export default function TypingTestView({
                   });
                 }
               }}
+              rows={1}
               disabled={status === 'paused' || status === 'finished'}
               autoFocus
             />
 
             {isLoadingPrompt ? (
-              <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Fetching text from database...</div>
+              <div style={{ color: '#64748b', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Sparkles size={16} /> Generating dynamic passage using Google Gemini...
+              </div>
+            ) : category === 'Programming' ? (
+              <div className="code-arena-container" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                {promptText.split('\n').map((lineText, lineIdx, allLines) => {
+                  const lineStartIndex = allLines.slice(0, lineIdx).reduce((acc, l) => acc + l.length + 1, 0);
+
+                  return (
+                    <div key={lineIdx} className="code-typing-line" style={{ display: 'flex', minHeight: '1.6em' }}>
+                      <span
+                        className="code-line-number"
+                        style={{
+                          width: '32px',
+                          userSelect: 'none',
+                          color: '#94a3b8',
+                          fontSize: '0.84rem',
+                          textAlign: 'right',
+                          paddingRight: '12px',
+                          fontFamily: 'monospace'
+                        }}
+                      >
+                        {lineIdx + 1}
+                      </span>
+                      <span className="code-line-content" style={{ flex: 1, whiteSpace: 'pre-wrap' }}>
+                        {lineText.split('').map((char, cIdx) => {
+                          const globalCharIndex = lineStartIndex + cIdx;
+                          const isTyped = globalCharIndex < typedInput.length;
+                          const isCurrent = globalCharIndex === typedInput.length;
+                          const isCorrect = isTyped && typedInput[globalCharIndex] === char;
+                          const isWrong = isTyped && typedInput[globalCharIndex] !== char;
+
+                          let charClass = 'pending';
+                          if (isCorrect) charClass = 'correct';
+                          if (isWrong) charClass = 'incorrect';
+
+                          return (
+                            <span key={cIdx} className={`typing-char ${charClass}`}>
+                              {isCurrent && <span className="typing-cursor" />}
+                              {char}
+                            </span>
+                          );
+                        })}
+                        {/* Newline indicator at end of line */}
+                        {lineIdx < allLines.length - 1 && (() => {
+                          const newlineIndex = lineStartIndex + lineText.length;
+                          const isNewlineTyped = newlineIndex < typedInput.length;
+                          const isNewlineCurrent = newlineIndex === typedInput.length;
+                          const isNewlineCorrect = isNewlineTyped && typedInput[newlineIndex] === '\n';
+                          const isNewlineWrong = isNewlineTyped && typedInput[newlineIndex] !== '\n';
+
+                          let nlClass = 'pending';
+                          if (isNewlineCorrect) nlClass = 'correct';
+                          if (isNewlineWrong) nlClass = 'incorrect';
+
+                          return (
+                            <span
+                              className={`typing-char newline-char ${nlClass}`}
+                              style={{ opacity: 0.5, fontSize: '0.82em', marginLeft: '3px' }}
+                              title="Press Enter"
+                            >
+                              {isNewlineCurrent && <span className="typing-cursor" />}
+                              ↵
+                            </span>
+                          );
+                        })()}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             ) : (
               <div>
                 {wordsWithIndices.map(({ word, start: wordStartIndex, end: wordEndIndex }, wIdx) => {
@@ -782,6 +1050,7 @@ export default function TypingTestView({
               </div>
             )}
           </div>
+
 
           {/* Interactive Virtual Keyboard */}
           <VirtualKeyboard

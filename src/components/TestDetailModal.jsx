@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, CheckCircle2, AlertCircle, FileText, Gauge, Target, Clock, ShieldCheck } from 'lucide-react';
 
-export default function TestDetailModal({ test, onClose }) {
+export default function TestDetailModal({ test, onClose, onReviewMistakes }) {
   if (!test) return null;
 
   return (
@@ -79,23 +79,49 @@ export default function TestDetailModal({ test, onClose }) {
           <CheckCircle2 size={16} /> Verified via Post-Submission Validation & Anti-Cheat Engine.
         </div>
 
-        <button
-          onClick={onClose}
-          style={{
-            width: '100%',
-            padding: '11px',
-            borderRadius: '10px',
-            border: 'none',
-            background: '#2563eb',
-            color: '#ffffff',
-            fontWeight: 700,
-            fontSize: '0.9rem',
-            cursor: 'pointer',
-            marginTop: '16px'
-          }}
-        >
-          Close
-        </button>
+        <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+          {onReviewMistakes && (
+            <button
+              onClick={() => {
+                onReviewMistakes(test);
+                onClose();
+              }}
+              style={{
+                flex: 1,
+                padding: '11px',
+                borderRadius: '10px',
+                border: '1px solid #C7D2FE',
+                background: '#EEF2FF',
+                color: '#4F46E5',
+                fontWeight: 700,
+                fontSize: '0.88rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px'
+              }}
+            >
+              <FileText size={15} /> Review Mistakes
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            style={{
+              flex: 1,
+              padding: '11px',
+              borderRadius: '10px',
+              border: 'none',
+              background: '#2563eb',
+              color: '#ffffff',
+              fontWeight: 700,
+              fontSize: '0.88rem',
+              cursor: 'pointer'
+            }}
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );

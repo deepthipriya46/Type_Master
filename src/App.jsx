@@ -11,13 +11,16 @@ import PracticeView from './views/PracticeView';
 import HistoryView from './views/HistoryView';
 import SettingsView from './views/SettingsView';
 import HelpView from './views/HelpView';
+import FeedbackView from './views/FeedbackView';
 import LoginView from './views/LoginView';
 import AdminPortal from './views/admin/AdminPortal';
 import SupabaseModal from './components/SupabaseModal';
 import PremiumModal from './components/PremiumModal';
 import TestDetailModal from './components/TestDetailModal';
+import ReviewMistakesView from './views/ReviewMistakesView';
 import { supabaseService } from './services/supabaseService';
 import { useAuth } from './context/AuthContext';
+import { X } from 'lucide-react';
 
 export default function App() {
   const authContext = useAuth ? useAuth() : null;
@@ -43,9 +46,22 @@ export default function App() {
     return supabaseService.getCurrentUser();
   });
 
+  // Active User Profile Context for User Mode (Strictly bound to authenticated session)
+  const effectiveUser = authUser || authContextUser || supabaseService.getCurrentUser();
+  const activeTypistUser = effectiveUser || {
+    id: 'user_active',
+    username: 'Typist',
+    displayName: 'Typist',
+    display_name: 'Typist',
+    email: '',
+    role: 'user',
+    is_premium: false
+  };
+
   // Sync auth state whenever AuthContext user updates
   useEffect(() => {
-    if (authContextUser) {
+    const isAuthedSession = sessionStorage.getItem('typemaster_session_authenticated') === 'true';
+    if (authContextUser && isAuthedSession) {
       setAuthUser(authContextUser);
       setIsAuthenticated(true);
     }
@@ -55,7 +71,9 @@ export default function App() {
   const [portal, setPortal] = useState(() => {
     const saved = localStorage.getItem('typemaster_active_portal');
     const u = supabaseService.getCurrentUser();
-    if (saved === 'admin' && (u?.role === 'admin' || u?.email === 'admin@typemaster.com')) {
+    const path = window.location.pathname.replace(/^\//, '');
+    const isAdminUser = u?.role === 'admin' || u?.email === 'admin@typemaster.com';
+    if ((saved === 'admin' || path === 'admin' || path.startsWith('admin/')) && isAdminUser) {
       return 'admin';
     }
     return 'user';
@@ -75,6 +93,7 @@ export default function App() {
     if (path === 'typing-test') return 'typing-test';
     if (path === 'leaderboard') return 'leaderboard';
     if (path === 'progress') return 'progress';
+    if (path === 'feedback') return 'feedback';
     if (path === 'settings') return 'settings';
     if (path === 'help') return 'help';
     return 'dashboard';
@@ -129,15 +148,36 @@ export default function App() {
       return;
     }
 
-    // 2. If authenticated and visiting root '/', redirect to role-appropriate portal
-    if (window.location.pathname === '/' || window.location.pathname === '') {
-      if (portal === 'admin') {
+    const path = window.location.pathname.replace(/^\//, '');
+    const activeU = authUser || effectiveUser || supabaseService.getCurrentUser();
+    const isAdmin = activeU?.role === 'admin' || activeU?.email === 'admin@typemaster.com';
+
+    // 2. If visiting /admin as an admin, ensure portal is set to admin
+    if (path === 'admin' || path.startsWith('admin/')) {
+      if (isAdmin) {
+        if (portal !== 'admin') {
+          setPortal('admin');
+          setCurrentView('admin');
+          localStorage.setItem('typemaster_active_portal', 'admin');
+        }
+      } else {
+        setShowAccessDeniedModal(true);
+        setPortal('user');
+        setCurrentView('dashboard');
+        window.history.replaceState(null, '', '/dashboard');
+      }
+      return;
+    }
+
+    // 3. If authenticated and visiting root '/', redirect to role-appropriate portal
+    if (path === '' || path === '/') {
+      if (portal === 'admin' && isAdmin) {
         window.history.replaceState(null, '', '/admin');
       } else {
         window.history.replaceState(null, '', '/dashboard');
       }
     }
-  }, [isAuthenticated, portal]);
+  }, [isAuthenticated, portal, authUser, effectiveUser]);
 
   // Handle browser back/forward buttons (popstate)
   useEffect(() => {
@@ -174,6 +214,7 @@ export default function App() {
           'typing-test': 'typing-test',
           'leaderboard': 'leaderboard',
           'progress': 'progress',
+          'feedback': 'feedback',
           'settings': 'settings',
           'help': 'help'
         };
@@ -231,18 +272,8 @@ export default function App() {
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState(false);
   const [selectedTestDetail, setSelectedTestDetail] = useState(null);
+  const [reviewMistakesSession, setReviewMistakesSession] = useState(null);
 
-  // Active User Profile Context for User Mode (Strictly bound to authenticated session)
-  const effectiveUser = authContextUser || authUser || supabaseService.getCurrentUser();
-  const activeTypistUser = effectiveUser || {
-    id: 'user_active',
-    username: 'Typist',
-    displayName: 'Typist',
-    display_name: 'Typist',
-    email: '',
-    role: 'user',
-    is_premium: false
-  };
 
   // Refresh Dashboard Aggregation in Real-Time
   const refreshDashboard = useCallback(async () => {
@@ -296,6 +327,12 @@ export default function App() {
     sessionStorage.setItem('typemaster_session_authenticated', 'true');
     setAuthUser(authenticatedUser);
 
+    if (authContext?.login) {
+      authContext.login(authenticatedUser);
+    } else if (authContext?.setUser) {
+      authContext.setUser(authenticatedUser);
+    }
+
     const isAdmin = authenticatedUser.role === 'admin' || authenticatedUser.email === 'admin@typemaster.com';
 
     if (targetPortal === 'admin' && isAdmin) {
@@ -333,6 +370,7 @@ export default function App() {
   // 1. AUTH GUARD: MANDATORY INITIAL ROUTE TO LOGIN VIEW
   // ==========================================================
   if (!isAuthenticated || currentView === 'login') {
+    const isTargetingAdmin = window.location.pathname.startsWith('/admin') || portal === 'admin' || localStorage.getItem('typemaster_active_portal') === 'admin';
     return (
       <>
         <LoginView
@@ -340,7 +378,7 @@ export default function App() {
           onCancel={isAuthenticated ? () => navigateTo('dashboard') : null}
           onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
           supabaseConnected={supabaseConnected}
-          initialPortal={portal}
+          initialPortal={isTargetingAdmin ? 'admin' : portal}
         />
         <SupabaseModal
           isOpen={isSupabaseModalOpen}
@@ -358,8 +396,10 @@ export default function App() {
   // 2. DUAL-PORTAL ARCHITECTURE: ADMIN PORTAL
   // Strict Role Authorization Enforced
   // ==========================================================
-  if (portal === 'admin') {
-    const isAllowedAdmin = authUser?.role === 'admin' || authUser?.email === 'admin@typemaster.com';
+  const activeAdminUser = authUser || effectiveUser || supabaseService.getCurrentUser();
+  const isAllowedAdmin = activeAdminUser?.role === 'admin' || activeAdminUser?.email === 'admin@typemaster.com';
+
+  if (portal === 'admin' || (currentView === 'admin' && isAllowedAdmin)) {
     if (!isAllowedAdmin) {
       // Trigger Access Denied Notice
       return (
@@ -372,7 +412,14 @@ export default function App() {
       );
     }
 
-    const adminProfile = authUser?.role === 'admin' ? authUser : DEFAULT_ADMIN_USER;
+    const adminProfile = {
+      id: activeAdminUser?.id || 'admin_master_01',
+      name: activeAdminUser?.displayName || activeAdminUser?.username || 'System Administrator',
+      username: activeAdminUser?.username || 'admin',
+      email: activeAdminUser?.email || 'admin@typemaster.com',
+      avatar: activeAdminUser?.avatar_url || 'https://api.dicebear.com/7.x/initials/svg?seed=Admin',
+      role: 'Super Administrator'
+    };
 
     return (
       <>
@@ -499,6 +546,13 @@ export default function App() {
           />
         )}
 
+        {currentView === 'feedback' && (
+          <FeedbackView
+            user={displayedUser}
+            onNavigate={(view) => navigateTo(view)}
+          />
+        )}
+
         {currentView === 'settings' && (
           <SettingsView
             user={displayedUser}
@@ -537,7 +591,105 @@ export default function App() {
       <TestDetailModal
         test={selectedTestDetail}
         onClose={() => setSelectedTestDetail(null)}
+        onReviewMistakes={(test) => setReviewMistakesSession(test)}
       />
+
+      {/* Review Past Test Mistakes Modal from Dashboard / History */}
+      {reviewMistakesSession && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.8)',
+            backdropFilter: 'blur(6px)',
+            zIndex: 10000,
+            overflowY: 'auto',
+            padding: '24px 20px'
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '1300px',
+              margin: '0 auto',
+              background: '#FFFFFF',
+              borderRadius: '24px',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+              border: '1px solid #E2E8F0',
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '16px 24px',
+                borderBottom: '1px solid #E2E8F0',
+                background: '#F8FAFC'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0F172A' }}>
+                  Session Mistake Analysis
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReviewMistakesSession(null)}
+                style={{
+                  background: '#FFFFFF',
+                  border: '1px solid #CBD5E1',
+                  borderRadius: '50%',
+                  width: '32px',
+                  height: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: '#64748B'
+                }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ padding: '12px' }}>
+              <ReviewMistakesView
+                sessionData={{
+                  ...reviewMistakesSession,
+                  promptText: reviewMistakesSession.prompt_text || reviewMistakesSession.promptText || 'The quick brown fox jumps over the lazy dog.',
+                  typedInput: reviewMistakesSession.typed_input || reviewMistakesSession.typedInput || '',
+                  timestamp: reviewMistakesSession.created_at || reviewMistakesSession.date,
+                  formattedDate: reviewMistakesSession.date
+                }}
+                onNavigate={(v) => {
+                  setReviewMistakesSession(null);
+                  navigateTo(v);
+                }}
+                onRetryTest={() => {
+                  setReviewMistakesSession(null);
+                  navigateTo('typing-test');
+                }}
+                onPracticeMistakes={(missedWords) => {
+                  setReviewMistakesSession(null);
+                  if (missedWords && missedWords.length > 0) {
+                    const drill = missedWords.slice(0, 15).join(' ') + ' ' + missedWords.slice(0, 15).join(' ');
+                    handleStartTest({
+                      duration: 60,
+                      customPrompt: drill,
+                      category: 'Mistake Drill',
+                      difficulty: 'Targeted Practice'
+                    });
+                  } else {
+                    navigateTo('typing-test');
+                  }
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

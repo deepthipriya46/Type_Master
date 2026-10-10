@@ -36,17 +36,35 @@ CREATE TABLE IF NOT EXISTS public.test_sessions (
   difficulty TEXT DEFAULT 'Easy',
   result_badge TEXT,
   is_valid BOOLEAN DEFAULT true,
+  mistake_details JSONB DEFAULT '[]'::jsonb,
+  prompt_text TEXT,
+  typed_input TEXT,
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now())
 );
 
--- 3. FEEDBACK TABLE
+-- 3. FEEDBACK TABLE (User Portal & Admin Telemetry)
 CREATE TABLE IF NOT EXISTS public.feedback (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id TEXT NOT NULL,
-  rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+  category TEXT DEFAULT 'General Feedback',
+  subject TEXT,
+  message TEXT,
   comment TEXT,
+  rating INTEGER CHECK (rating IS NULL OR (rating >= 1 AND rating <= 5)),
+  status TEXT DEFAULT 'Pending',
+  admin_response TEXT,
+  attachment_url TEXT,
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now())
 );
+
+-- Ensure all enhanced columns exist if table was already created
+ALTER TABLE public.feedback ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'General Feedback';
+ALTER TABLE public.feedback ADD COLUMN IF NOT EXISTS subject TEXT;
+ALTER TABLE public.feedback ADD COLUMN IF NOT EXISTS message TEXT;
+ALTER TABLE public.feedback ADD COLUMN IF NOT EXISTS comment TEXT;
+ALTER TABLE public.feedback ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Pending';
+ALTER TABLE public.feedback ADD COLUMN IF NOT EXISTS admin_response TEXT;
+ALTER TABLE public.feedback ADD COLUMN IF NOT EXISTS attachment_url TEXT;
 
 -- 4. SYSTEM SETTINGS TABLE (Global App Settings)
 CREATE TABLE IF NOT EXISTS public.system_settings (
@@ -83,3 +101,14 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.test_sessions;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.feedback;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.system_settings;
+
+-- 7. PRODUCTION ROW LEVEL SECURITY POLICIES FOR FEEDBACK
+-- (Enforces user isolation so users can insert & read only their own feedback records)
+-- Run these in Supabase SQL editor if you wish to enforce strict per-user RLS:
+-- DROP POLICY IF EXISTS "Public feedback access" ON public.feedback;
+-- CREATE POLICY "Users can insert own feedback" ON public.feedback 
+--   FOR INSERT WITH CHECK (auth.uid()::text = user_id OR user_id LIKE 'guest_%');
+-- CREATE POLICY "Users can view own feedback" ON public.feedback 
+--   FOR SELECT USING (auth.uid()::text = user_id OR user_id LIKE 'guest_%' OR auth.jwt() ->> 'email' = 'admin@typemaster.com');
+-- CREATE POLICY "Admins can update feedback status" ON public.feedback 
+--   FOR UPDATE USING (auth.jwt() ->> 'email' = 'admin@typemaster.com' OR (SELECT role FROM public.profiles WHERE id = auth.uid()::text) = 'admin');

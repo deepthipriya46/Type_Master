@@ -12,7 +12,8 @@ import {
   Crown,
   CheckCircle2,
   Database,
-  UserCheck
+  UserCheck,
+  MessageSquare
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -32,6 +33,7 @@ export default function Sidebar({
     { id: 'progress', label: 'Progress', icon: TrendingUp },
     { id: 'practice', label: 'Practice', icon: BookOpen },
     { id: 'history', label: 'Test History', icon: Clock },
+    { id: 'feedback', label: 'Feedback', icon: MessageSquare },
     { id: 'settings', label: 'Settings', icon: Settings },
     { id: 'help', label: 'Help & Support', icon: HelpCircle }
   ];

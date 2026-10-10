@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   Gauge,
   Target,
@@ -21,6 +21,7 @@ import VirtualKeyboard from '../components/VirtualKeyboard';
 import { supabaseService } from '../services/supabaseService';
 import { soundSynth } from '../services/soundSynthesizer';
 import { getPassageForDuration } from '../utils/pdfTextLoader.js';
+import FirstTestFeedbackModal from '../components/FirstTestFeedbackModal';
 
 export default function TypingTestView({
   initialSettings = {},
@@ -58,6 +59,9 @@ export default function TypingTestView({
   const [liveWpmHistory, setLiveWpmHistory] = useState([0]);
   const [liveAccHistory, setLiveAccHistory] = useState([100]);
 
+  // First-test feedback modal state
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+
   // Audio settings synchronized with soundSynthesizer
   const [soundEnabled, setSoundEnabled] = useState(() => soundSynth.enabled);
   const [soundType, setSoundType] = useState(() => soundSynth.switchType || 'blue');
@@ -75,6 +79,7 @@ export default function TypingTestView({
   const elapsedSecondsRef = useRef(0);
   const charCountRef = useRef(0);
   const errorCountRef = useRef(0);
+  const finishTestRef = useRef(null);
 
   // Load Prompt from PDF Word Repository or specialized category
   const loadPrompt = useCallback(async (cat, diff, prevText = '', dur = duration) => {
@@ -226,7 +231,9 @@ export default function TypingTestView({
           if (prev <= 1) {
             clearInterval(timerIntervalRef.current);
             const nominalDur = typeof duration === 'number' ? duration : 60;
-            finishTest(undefined, undefined, undefined, undefined, nominalDur);
+            if (finishTestRef.current) {
+              finishTestRef.current(undefined, undefined, undefined, undefined, nominalDur);
+            }
             return 0;
           }
           return prev - 1;
@@ -385,10 +392,26 @@ export default function TypingTestView({
       ...submissionResult
     });
 
+    // Check First-Test condition for Feedback Modal
+    const activeUser = supabaseService.getCurrentUser();
+    const activeUserId = activeUser?.id;
+    const feedbackKey = activeUserId ? `typemaster_feedback_submitted_${activeUserId}` : 'typemaster_feedback_submitted_guest';
+    const alreadySubmitted = localStorage.getItem(feedbackKey) === 'true';
+    const testsCount = submissionResult?.user?.tests_completed ?? activeUser?.tests_completed ?? 1;
+
+    if (testsCount <= 1 && !alreadySubmitted) {
+      setTimeout(() => {
+        setShowFeedbackModal(true);
+      }, 1200);
+    }
+
     if (onTestCompleted) {
       onTestCompleted();
     }
   };
+  useEffect(() => {
+    finishTestRef.current = finishTest;
+  });
 
   // Keyboard shortcut listener
   useEffect(() => {
@@ -410,8 +433,17 @@ export default function TypingTestView({
   const targetChar = promptText[typedInput.length] || '';
 
   // Render Prompt Text with active words and characters
-  const words = promptText.split(' ');
-  let charTracker = 0;
+  const wordsWithIndices = useMemo(() => {
+    const list = promptText.split(' ');
+    const items = [];
+    let cur = 0;
+    for (let i = 0; i < list.length; i++) {
+      const w = list[i];
+      items.push({ word: w, start: cur, end: cur + w.length });
+      cur += w.length + 1;
+    }
+    return items;
+  }, [promptText]);
 
   return (
     <div className="page-container">
@@ -703,11 +735,7 @@ export default function TypingTestView({
               <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Fetching text from database...</div>
             ) : (
               <div>
-                {words.map((word, wIdx) => {
-                  const wordStartIndex = charTracker;
-                  const wordEndIndex = charTracker + word.length;
-                  charTracker += word.length + 1; // +1 for the space
-
+                {wordsWithIndices.map(({ word, start: wordStartIndex, end: wordEndIndex }, wIdx) => {
                   const isWordActive = typedInput.length >= wordStartIndex && typedInput.length <= wordEndIndex;
 
                   return (
@@ -734,7 +762,7 @@ export default function TypingTestView({
                         );
                       })}
                       {/* Space character after word */}
-                      {wIdx < words.length - 1 && (
+                      {wIdx < wordsWithIndices.length - 1 && (
                         <span
                           className={`typing-char ${
                             wordEndIndex < typedInput.length
@@ -981,6 +1009,15 @@ export default function TypingTestView({
           </div>
         </div>
       )}
+
+      {/* First-Test Feedback Popup Modal */}
+      <FirstTestFeedbackModal
+        isOpen={showFeedbackModal}
+        onClose={() => setShowFeedbackModal(false)}
+        userId={supabaseService.getCurrentUser()?.id}
+        userName={supabaseService.getCurrentUser()?.username || supabaseService.getCurrentUser()?.display_name || 'Typist'}
+        userEmail={supabaseService.getCurrentUser()?.email || ''}
+      />
     </div>
   );
 }

@@ -75,6 +75,10 @@ export async function loadPdfFromRepository(pdfUrl = '/words_repository.pdf') {
     
     // Dynamic import to keep Vite bundle lightweight and resilient
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    if (pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
+      pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version || '4.10.38'}/legacy/build/pdf.worker.min.mjs`;
+    }
+
     const loadingTask = pdfjs.getDocument({
       data: new Uint8Array(arrayBuffer),
       useSystemFonts: true,

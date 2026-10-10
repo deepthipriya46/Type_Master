@@ -4,19 +4,26 @@ import { Search, Flame, Bell, Check, Database, ShieldCheck, Crown, LogIn, LogOut
 export default function TopHeader({
   streak = 0,
   user,
+  authRole,
+  hasAdminPrivileges = false,
   onOpenUpgradeModal,
   onOpenSupabaseModal,
   onOpenLogin,
   onSignOut,
-  supabaseConnected
+  supabaseConnected,
+  onSwitchToAdminPortal
 }) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Admin Portal Toggle: ONLY visible if authenticated session has admin role
+  const isAdmin = Boolean(hasAdminPrivileges || authRole === 'admin' || user?.role === 'admin' || user?.email === 'admin@typemaster.com');
+
   const notifications = [
     { id: 1, title: 'Real-Time Telemetry Active', desc: 'Supabase PostgreSQL connected for dynamic tracking', time: 'Just now' },
-    { id: 2, title: 'Anti-Cheat Protection', desc: 'Real-time keystroke integrity validation enabled', time: 'Active' }
+    { id: 2, title: 'Anti-Cheat Protection', desc: 'Real-time keystroke integrity validation enabled', time: 'Active' },
+    { id: 3, title: 'Dual-Portal Architecture', desc: 'Admin Portal & User Portal fully synchronized', time: 'Active' }
   ];
 
   const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user?.username || 'Typist')}`;
@@ -36,6 +43,31 @@ export default function TopHeader({
 
       {/* Header Actions */}
       <div className="header-actions">
+        {/* Admin Portal Switcher button if user has admin privileges */}
+        {isAdmin && onSwitchToAdminPortal && (
+          <button
+            onClick={onSwitchToAdminPortal}
+            style={{
+              background: '#0F172A',
+              border: '1px solid #1E293B',
+              color: '#FFFFFF',
+              padding: '6px 12px',
+              borderRadius: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 2px 6px rgba(15, 23, 42, 0.3)'
+            }}
+            title="Switch to Admin Management Portal"
+          >
+            <ShieldCheck size={15} color="#818CF8" />
+            <span>Admin Portal</span>
+          </button>
+        )}
+
         {/* Streak Counter Pill */}
         <div className="streak-pill" title="Daily Practice Streak">
           <Flame size={17} />
@@ -148,6 +180,31 @@ export default function TopHeader({
                   {user?.is_premium ? '👑 Premium Member' : 'Standard Member'}
                 </div>
               </div>
+
+              {isAdmin && onSwitchToAdminPortal && (
+                <button
+                  onClick={() => { setShowUserMenu(false); onSwitchToAdminPortal(); }}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    background: '#EEF2FF',
+                    border: '1px solid #C7D2FE',
+                    padding: '8px 10px',
+                    borderRadius: '8px',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    color: '#4F46E5',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    marginBottom: '6px'
+                  }}
+                >
+                  <ShieldCheck size={15} color="#4F46E5" />
+                  Enter Admin Portal
+                </button>
+              )}
 
               <button
                 onClick={() => { setShowUserMenu(false); onOpenLogin(); }}

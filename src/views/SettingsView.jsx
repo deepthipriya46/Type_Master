@@ -660,7 +660,7 @@ export default function SettingsView({
           <div className="card-header-row" style={{ marginBottom: '12px' }}>
             <div className="card-title-group">
               <Database size={19} color="#10b981" />
-              <h3 style={{ fontSize: '0.98rem', fontWeight: 700 }}>Supabase PostgreSQL Connectivity</h3>
+              <h3 style={{ fontSize: '0.98rem', fontWeight: 700 }}>Database Connection Mode</h3>
             </div>
             <span
               style={{
@@ -674,12 +674,12 @@ export default function SettingsView({
                 whiteSpace: 'nowrap'
               }}
             >
-              {supabaseConnected ? 'Connected 🟢' : 'Local Engine ⚡'}
+              {supabaseConnected ? 'Supabase Cloud 🟢' : 'Local Engine ⚡'}
             </span>
           </div>
 
           <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '18px' }}>
-            TypeMaster synchronizes your test logs, daily streaks, and custom prompts to live Supabase PostgreSQL.
+            Choose whether to sync your tests and streaks to live Supabase PostgreSQL or run in private offline local mode.
           </p>
 
           <button
@@ -702,7 +702,7 @@ export default function SettingsView({
               boxShadow: '0 4px 12px rgba(16,185,129,0.25)'
             }}
           >
-            <Database size={16} /> Configure Supabase Credentials
+            <Database size={16} /> Select Database Engine
           </button>
         </div>
 

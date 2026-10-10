@@ -1,154 +1,211 @@
 import React, { useState } from 'react';
-import { X, Database, CheckCircle2, AlertCircle, ExternalLink, Key, Globe, ShieldCheck } from 'lucide-react';
+import { X, Database, ShieldCheck, HardDrive, Check, Cloud } from 'lucide-react';
 import { supabaseService } from '../services/supabaseService';
 
 export default function SupabaseModal({ isOpen, onClose, onConnectedChange }) {
-  const creds = supabaseService.getCredentials();
-  const [url, setUrl] = useState(creds.url || '');
-  const [anonKey, setAnonKey] = useState(creds.anonKey || '');
   const [loading, setLoading] = useState(false);
-  const [statusMessage, setStatusMessage] = useState(null);
+  const currentEngine = supabaseService.getEngineMode();
 
   if (!isOpen) return null;
 
-  const handleSaveAndTest = async () => {
+  const handleConnectSupabase = async () => {
     setLoading(true);
-    setStatusMessage(null);
-    const res = await supabaseService.setCredentials(url, anonKey);
+    await supabaseService.setEngineMode('supabase');
     setLoading(false);
-    setStatusMessage(res);
-    if (res.success && onConnectedChange) {
-      onConnectedChange(supabaseService.isConfigured());
+    if (onConnectedChange) {
+      onConnectedChange(true);
     }
+    onClose();
   };
 
-  const handleUseLocalFallback = async () => {
-    await supabaseService.setCredentials('', '');
-    setUrl('');
-    setAnonKey('');
-    setStatusMessage({ success: true, message: 'Switched to Local Fallback Engine. 100% operational!' });
+  const handleUseLocal = async () => {
+    setLoading(true);
+    await supabaseService.setEngineMode('local');
+    setLoading(false);
     if (onConnectedChange) {
       onConnectedChange(false);
     }
+    onClose();
   };
 
   return (
     <div className="modal-overlay">
-      <div className="modal-card">
-        <button className="modal-close-btn" onClick={onClose}>
+      <div className="modal-card" style={{ maxWidth: '480px', padding: '28px' }}>
+        <button className="modal-close-btn" onClick={onClose} title="Close">
           <X size={18} />
         </button>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+        {/* Modal Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '18px' }}>
           <div
             style={{
-              width: '44px',
-              height: '44px',
+              width: '46px',
+              height: '46px',
               borderRadius: '12px',
               background: '#ecfdf5',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#059669'
+              color: '#059669',
+              boxShadow: '0 4px 12px rgba(5, 150, 105, 0.15)'
             }}
           >
             <Database size={24} />
           </div>
           <div>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#1e293b' }}>
-              Supabase Database Setup
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#1e293b', letterSpacing: '-0.3px' }}>
+              Database Connection Mode
             </h3>
-            <p style={{ fontSize: '0.8rem', color: '#64748b' }}>
-              Connect your live Supabase project for real-time Postgres storage.
+            <p style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '2px' }}>
+              Choose your active database engine for telemetry storage.
             </p>
           </div>
         </div>
 
-        {/* Step Guide */}
-        <div
-          style={{
-            background: '#f8fafc',
-            border: '1px solid #e2e8f0',
-            borderRadius: '12px',
-            padding: '12px 16px',
-            marginBottom: '18px',
-            fontSize: '0.78rem',
-            color: '#475569',
-            lineHeight: 1.5
-          }}
-        >
-          <div style={{ fontWeight: 700, color: '#1e293b', marginBottom: '4px' }}>
-            📋 Quick Setup:
-          </div>
-          1. Run <code style={{ background: '#e2e8f0', padding: '1px 5px', borderRadius: '4px' }}>supabase_schema.sql</code> in your <strong>Supabase SQL Editor</strong>.<br />
-          2. Copy your <strong>Project URL</strong> and <strong>anon public API key</strong> from <em>Project Settings → API</em>.
-        </div>
-
-        <div className="form-group">
-          <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Globe size={14} color="#2563eb" /> Project URL
-          </label>
-          <input
-            type="text"
-            className="form-input"
-            placeholder="https://xyzcompany.supabase.co"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group">
-          <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Key size={14} color="#2563eb" /> Anon Public API Key
-          </label>
-          <input
-            type="password"
-            className="form-input"
-            placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-            value={anonKey}
-            onChange={(e) => setAnonKey(e.target.value)}
-          />
-        </div>
-
-        {statusMessage && (
+        {/* Engine Modes Preview */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '22px' }}>
+          {/* Supabase Engine Card */}
           <div
+            onClick={handleConnectSupabase}
             style={{
-              padding: '10px 14px',
-              borderRadius: '10px',
-              marginBottom: '16px',
-              fontSize: '0.8rem',
-              fontWeight: 600,
+              border: currentEngine === 'supabase' ? '2px solid #10b981' : '1px solid #e2e8f0',
+              background: currentEngine === 'supabase' ? '#f0fdf4' : '#ffffff',
+              borderRadius: '12px',
+              padding: '14px 16px',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
               display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              background: statusMessage.success ? '#ecfdf5' : '#fef2f2',
-              color: statusMessage.success ? '#065f46' : '#991b1b',
-              border: `1px solid ${statusMessage.success ? '#a7f3d0' : '#fecaca'}`
+              alignItems: 'flex-start',
+              gap: '12px'
             }}
           >
-            {statusMessage.success ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
-            {statusMessage.message}
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
+                background: '#dcfce7',
+                color: '#16a34a',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                marginTop: '2px'
+              }}
+            >
+              <Cloud size={20} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#0f172a' }}>
+                  Supabase Cloud Engine
+                </span>
+                {currentEngine === 'supabase' && (
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      background: '#10b981',
+                      color: '#ffffff',
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <Check size={11} /> Active
+                  </span>
+                )}
+              </div>
+              <p style={{ fontSize: '0.78rem', color: '#475569', marginTop: '4px', lineHeight: 1.4 }}>
+                Real-time PostgreSQL sync for test logs, streaks, dynamic achievements, and global typist rankings.
+              </p>
+            </div>
           </div>
-        )}
 
-        <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
+          {/* Local Engine Card */}
+          <div
+            onClick={handleUseLocal}
+            style={{
+              border: currentEngine === 'local' ? '2px solid #3b82f6' : '1px solid #e2e8f0',
+              background: currentEngine === 'local' ? '#eff6ff' : '#ffffff',
+              borderRadius: '12px',
+              padding: '14px 16px',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '12px'
+            }}
+          >
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
+                background: '#dbeafe',
+                color: '#2563eb',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                marginTop: '2px'
+              }}
+            >
+              <HardDrive size={20} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#0f172a' }}>
+                  Local In-Browser Engine
+                </span>
+                {currentEngine === 'local' && (
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      background: '#2563eb',
+                      color: '#ffffff',
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <Check size={11} /> Active
+                  </span>
+                )}
+              </div>
+              <p style={{ fontSize: '0.78rem', color: '#475569', marginTop: '4px', lineHeight: 1.4 }}>
+                Private, offline browser storage with 0ms network latency. Practice freely without cloud connectivity.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div style={{ display: 'flex', gap: '12px' }}>
           <button
-            onClick={handleSaveAndTest}
+            onClick={handleConnectSupabase}
             disabled={loading}
             style={{
-              flex: 1,
+              flex: 1.2,
               padding: '12px',
               borderRadius: '10px',
               background: '#10b981',
               color: '#ffffff',
               border: 'none',
               fontWeight: 700,
-              fontSize: '0.9rem',
+              fontSize: '0.88rem',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '6px'
+              gap: '6px',
+              boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)',
+              transition: 'background 0.2s ease'
             }}
           >
             <ShieldCheck size={16} />
@@ -156,18 +213,26 @@ export default function SupabaseModal({ isOpen, onClose, onConnectedChange }) {
           </button>
 
           <button
-            onClick={handleUseLocalFallback}
+            onClick={handleUseLocal}
+            disabled={loading}
             style={{
-              padding: '12px 16px',
+              flex: 1,
+              padding: '12px 14px',
               borderRadius: '10px',
               background: '#f1f5f9',
               border: '1px solid #cbd5e1',
               color: '#475569',
               fontWeight: 700,
               fontSize: '0.84rem',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              transition: 'all 0.2s ease'
             }}
           >
+            <HardDrive size={15} />
             Use Local Engine
           </button>
         </div>

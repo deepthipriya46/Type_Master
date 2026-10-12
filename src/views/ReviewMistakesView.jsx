@@ -41,20 +41,43 @@ export default function ReviewMistakesView({
     duration = 60,
     category = 'Random Text',
     difficulty = 'Easy',
-    promptText = '',
-    typedInput = '',
     timestamp = new Date().toISOString(),
     formattedDate = '',
     formattedTime = ''
   } = sessionData || {};
 
+  const effectivePromptText = sessionData?.prompt_text || sessionData?.promptText || '';
+  const effectiveTypedInput = sessionData?.typed_input || sessionData?.typedInput || '';
+  const hasTelemetry = Boolean(effectivePromptText && effectivePromptText.trim().length > 0);
+
   // Analyze session diffing and mistakes
   const analysis = useMemo(() => {
-    return analyzeSessionMistakes(promptText, typedInput);
-  }, [promptText, typedInput]);
+    if (!hasTelemetry) {
+      return {
+        wordDiffs: [],
+        wrongCharactersCount: sessionData?.wrong_characters ?? sessionData?.wrongCharacters ?? 0,
+        missedCharactersCount: sessionData?.missed_characters ?? sessionData?.missedCharacters ?? 0,
+        extraCharactersCount: sessionData?.extra_characters ?? sessionData?.extraCharacters ?? 0,
+        totalMistakesCount: sessionData?.total_mistakes ?? sessionData?.totalMistakes ?? errors ?? 0,
+        correctCharactersCount: sessionData?.correct_characters ?? sessionData?.correctCharacters ?? 0,
+        mostCommonConfusion: 'None (Historical)',
+        mistakeWords: [],
+        targetWords: [],
+        unreachedWords: [],
+        tips: [
+          'Maintain a steady typing rhythm and focus on keystroke precision.',
+          'Lock in 96%+ accuracy as your baseline before chasing raw speed bursts.'
+        ]
+      };
+    }
+    return analyzeSessionMistakes(effectivePromptText, effectiveTypedInput);
+  }, [effectivePromptText, effectiveTypedInput, hasTelemetry, sessionData, errors]);
 
-  const mistakesCount = analysis.totalMistakesCount || errors || 0;
-  const correctCharsCount = analysis.correctCharactersCount || 0;
+  const mistakesCount = sessionData?.total_mistakes ?? sessionData?.totalMistakes ?? (analysis.totalMistakesCount > 0 ? analysis.totalMistakesCount : errors);
+  const correctCharsCount = sessionData?.correct_characters ?? sessionData?.correctCharacters ?? analysis.correctCharactersCount;
+  const wrongCharsCount = sessionData?.wrong_characters ?? sessionData?.wrongCharacters ?? analysis.wrongCharactersCount;
+  const missedCharsCount = sessionData?.missed_characters ?? sessionData?.missedCharacters ?? analysis.missedCharactersCount;
+  const extraCharsCount = sessionData?.extra_characters ?? sessionData?.extraCharacters ?? analysis.extraCharactersCount;
 
   // Format Date and Time
   const dateDisplay = useMemo(() => {
@@ -364,7 +387,47 @@ export default function ReviewMistakesView({
           </div>
 
           {/* Diff Content Box */}
-          {viewMode === 'yourText' ? (
+          {!hasTelemetry ? (
+            <div
+              style={{
+                padding: '36px 24px',
+                background: '#F8FAFC',
+                borderRadius: '14px',
+                border: '1px dashed #CBD5E1',
+                textAlign: 'center',
+                margin: '8px 0'
+              }}
+            >
+              <div
+                style={{
+                  width: '46px',
+                  height: '46px',
+                  borderRadius: '50%',
+                  background: '#FEF3C7',
+                  color: '#D97706',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  margin: '0 auto 12px'
+                }}
+              >
+                <AlertTriangle size={22} />
+              </div>
+              <h4 style={{ fontSize: '1.02rem', fontWeight: 800, color: '#1E293B', marginBottom: '6px' }}>
+                Detailed Mistake Telemetry Unavailable for This Historical Test
+              </h4>
+              <p style={{ fontSize: '0.84rem', color: '#64748B', maxWidth: '580px', margin: '0 auto 16px', lineHeight: 1.5 }}>
+                This test session was recorded without character-level passage telemetry. The verified test results above (WPM: {wpm}, Accuracy: {accuracy}%, Errors: {mistakesCount}) are accurately loaded from your saved record.
+              </p>
+              <div style={{ display: 'inline-flex', gap: '8px', fontSize: '0.78rem', color: '#475569', background: '#FFFFFF', padding: '6px 14px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+                <span>Duration: <strong>{durationDisplay}</strong></span>
+                <span>•</span>
+                <span>Category: <strong>{category}</strong></span>
+                <span>•</span>
+                <span>Status: <strong>Verified ✓</strong></span>
+              </div>
+            </div>
+          ) : viewMode === 'yourText' ? (
             /* Single Interactive "Your Text" View */
             <div
               style={{
@@ -451,9 +514,9 @@ export default function ReviewMistakesView({
                 </span>
               ))}
 
-              {analysis.unreachedWords.length > 0 && (
+              {(analysis.unreachedWords || []).length > 0 && (
                 <span style={{ color: '#94A3B8', fontStyle: 'italic' }}>
-                  {analysis.unreachedWords.join(' ')}
+                  {(analysis.unreachedWords || []).join(' ')}
                 </span>
               )}
             </div>
@@ -527,7 +590,7 @@ export default function ReviewMistakesView({
                     color: '#1E293B'
                   }}
                 >
-                  {promptText}
+                  {effectivePromptText}
                 </div>
               </div>
             </div>
@@ -550,15 +613,15 @@ export default function ReviewMistakesView({
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
               <div style={metricBoxStyle}>
                 <span style={{ fontSize: '0.72rem', color: '#DC2626', fontWeight: 700 }}>Wrong Letters</span>
-                <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#DC2626' }}>{analysis.wrongCharactersCount}</div>
+                <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#DC2626' }}>{wrongCharsCount}</div>
               </div>
               <div style={metricBoxStyle}>
                 <span style={{ fontSize: '0.72rem', color: '#D97706', fontWeight: 700 }}>Missed Letters</span>
-                <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#D97706' }}>{analysis.missedCharactersCount}</div>
+                <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#D97706' }}>{missedCharsCount}</div>
               </div>
               <div style={metricBoxStyle}>
                 <span style={{ fontSize: '0.72rem', color: '#7C3AED', fontWeight: 700 }}>Extra Letters</span>
-                <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#7C3AED' }}>{analysis.extraCharactersCount}</div>
+                <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#7C3AED' }}>{extraCharsCount}</div>
               </div>
               <div style={metricBoxStyle}>
                 <span style={{ fontSize: '0.72rem', color: '#2563EB', fontWeight: 700 }}>Confusion Pair</span>
@@ -647,7 +710,7 @@ export default function ReviewMistakesView({
               <span style={{ fontSize: '0.86rem', fontWeight: 800, color: '#92400E' }}>Tips to Improve</span>
             </div>
             <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '0.78rem', color: '#78350F', lineHeight: 1.5 }}>
-              {analysis.tips.map((tip, idx) => (
+              {(analysis.tips || []).map((tip, idx) => (
                 <li key={idx} style={{ marginBottom: '4px' }}>
                   {tip}
                 </li>
@@ -717,7 +780,7 @@ export default function ReviewMistakesView({
                     </td>
                     <td style={{ padding: '12px 14px' }}>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                        {item.errorTypes.map((badge, bIdx) => {
+                        {(item.errorTypes || []).map((badge, bIdx) => {
                           const isWrong = badge.includes('Wrong');
                           const isMissed = badge.includes('Missed');
                           const bg = isWrong ? '#FEF2F2' : isMissed ? '#FFFBEB' : '#F5F3FF';

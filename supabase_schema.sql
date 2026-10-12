@@ -165,3 +165,55 @@ BEGIN
   END IF;
 END $$;
 
+-- 9. CANONICAL TEST LOGS TABLE & TELEMETRY MIGRATIONS
+CREATE TABLE IF NOT EXISTS public.test_logs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  wpm INTEGER NOT NULL,
+  raw_wpm INTEGER,
+  accuracy NUMERIC(5, 2) NOT NULL,
+  duration TEXT,
+  errors INTEGER DEFAULT 0,
+  characters INTEGER DEFAULT 0,
+  category TEXT DEFAULT 'General',
+  difficulty TEXT DEFAULT 'Easy',
+  result_badge TEXT DEFAULT 'Good',
+  is_valid BOOLEAN DEFAULT true,
+  prompt_text TEXT,
+  typed_input TEXT,
+  mistake_details JSONB DEFAULT '[]'::jsonb,
+  mistake_stats JSONB DEFAULT '{}'::jsonb,
+  correct_characters INTEGER DEFAULT 0,
+  wrong_characters INTEGER DEFAULT 0,
+  missed_characters INTEGER DEFAULT 0,
+  extra_characters INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now())
+);
+
+-- Ensure non-destructive addition of rich telemetry columns to test_logs and test_sessions
+ALTER TABLE public.test_logs ADD COLUMN IF NOT EXISTS prompt_text TEXT;
+ALTER TABLE public.test_logs ADD COLUMN IF NOT EXISTS typed_input TEXT;
+ALTER TABLE public.test_logs ADD COLUMN IF NOT EXISTS mistake_details JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE public.test_logs ADD COLUMN IF NOT EXISTS mistake_stats JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE public.test_logs ADD COLUMN IF NOT EXISTS correct_characters INTEGER DEFAULT 0;
+ALTER TABLE public.test_logs ADD COLUMN IF NOT EXISTS wrong_characters INTEGER DEFAULT 0;
+ALTER TABLE public.test_logs ADD COLUMN IF NOT EXISTS missed_characters INTEGER DEFAULT 0;
+ALTER TABLE public.test_logs ADD COLUMN IF NOT EXISTS extra_characters INTEGER DEFAULT 0;
+
+ALTER TABLE public.test_sessions ADD COLUMN IF NOT EXISTS mistake_stats JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE public.test_sessions ADD COLUMN IF NOT EXISTS correct_characters INTEGER DEFAULT 0;
+ALTER TABLE public.test_sessions ADD COLUMN IF NOT EXISTS wrong_characters INTEGER DEFAULT 0;
+ALTER TABLE public.test_sessions ADD COLUMN IF NOT EXISTS missed_characters INTEGER DEFAULT 0;
+ALTER TABLE public.test_sessions ADD COLUMN IF NOT EXISTS extra_characters INTEGER DEFAULT 0;
+
+ALTER TABLE public.test_logs ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public test_logs access' AND tablename = 'test_logs') THEN
+    CREATE POLICY "Public test_logs access" ON public.test_logs FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+ALTER PUBLICATION supabase_realtime ADD TABLE public.test_logs;
+

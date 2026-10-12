@@ -1,15 +1,20 @@
 import React, { useState } from 'react';
-import { Award, Zap, Target, TrendingUp, Download, CheckCircle2, Lock, Activity, Sparkles } from 'lucide-react';
+import { Award, Zap, Target, TrendingUp, Download, CheckCircle2, Lock, Activity, Sparkles, FileSpreadsheet } from 'lucide-react';
+import { exportUserAnalyticsToExcel } from '../utils/excelExport';
 
 export default function PerformanceView({ user, isPremium, recentTests = [], onOpenUpgradeModal, onNavigate }) {
   const [selectedKeyGroup, setSelectedKeyGroup] = useState('all');
+  const [toastMessage, setToastMessage] = useState('');
 
   const testsCount = user?.tests_completed || recentTests.length || 0;
   const consistentTests = (recentTests || []).filter(t => t.accuracy >= 95).length;
   const consistency = recentTests.length > 0 ? Math.round((consistentTests / recentTests.length) * 100) : 0;
 
   const totalKeystrokesRaw = (recentTests || []).reduce((acc, test) => {
-    return acc + (test.characters || (test.wpm * 5 * (parseInt(test.duration) || 1)) || 0);
+    const durMins = typeof test.duration === 'string' && test.duration.includes('min')
+      ? (parseInt(test.duration) || 1)
+      : (typeof test.duration === 'number' && test.duration > 5 ? Math.max(1, Math.round(test.duration / 60)) : 1);
+    return acc + (test.characters || (test.wpm * 5 * durMins) || 0);
   }, 0);
 
   const formattedKeystrokes = totalKeystrokesRaw > 1000
@@ -31,13 +36,71 @@ export default function PerformanceView({ user, isPremium, recentTests = [], onO
     return { key: k, acc: calcAcc, speed: calcSpeed };
   });
 
+  const handleExportExcel = () => {
+    exportUserAnalyticsToExcel(user, recentTests, `TypeMaster_${user?.username || 'User'}_Analytics.xlsx`);
+    setToastMessage('Performance analytics exported to Excel (.xlsx)!');
+    setTimeout(() => setToastMessage(''), 3500);
+  };
+
   return (
-    <div className="page-container">
+    <div className="page-container" style={{ position: 'relative' }}>
+      {/* Toast Feedback Notification */}
+      {toastMessage && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '24px',
+            right: '24px',
+            background: '#0F172A',
+            color: '#FFFFFF',
+            padding: '12px 20px',
+            borderRadius: '12px',
+            boxShadow: '0 10px 25px -5px rgba(0,0,0,0.3)',
+            zIndex: 99999,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            fontSize: '0.86rem',
+            fontWeight: 600,
+            animation: 'fadeIn 0.2s ease-in-out'
+          }}
+        >
+          <CheckCircle2 size={18} color="#10B981" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       <div className="greeting-header">
         <div className="greeting-text">
           <h1>My Performance Analytics</h1>
           <p>Comprehensive telemetry on typing cadence, key accuracy, and mastery curves.</p>
         </div>
+        {testsCount > 0 && (
+          <button
+            onClick={handleExportExcel}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              backgroundColor: '#10B981',
+              color: '#FFFFFF',
+              border: 'none',
+              padding: '8px 16px',
+              borderRadius: '10px',
+              fontSize: '0.84rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(16, 185, 129, 0.25)',
+              transition: 'background 0.15s'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#059669')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#10B981')}
+            title="Download full performance telemetry in Excel (.xlsx) format"
+          >
+            <FileSpreadsheet size={15} />
+            <span>Export Analytics (.xlsx)</span>
+          </button>
+        )}
       </div>
 
       {/* Top Metric Highlights */}

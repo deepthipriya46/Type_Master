@@ -1,10 +1,31 @@
 /**
  * Mistake Analyzer Engine for TypeMaster
- * Performs Levenshtein-based character & word diffing between prompt text and typed input.
+ * Performs Levenshtein-based character & word sequence diffing between prompt text and typed input.
  * Calculates exact wrong, missed, and extra characters, confusion pairs, and word breakdown.
+ * Uses sequence-aware word alignment to prevent extra/missing words from desynchronizing the diff.
  */
 
 export function alignWord(targetWord, typedWord) {
+  if (!targetWord && !typedWord) return [];
+
+  // Pure extra word typed
+  if (!targetWord && typedWord) {
+    return typedWord.split('').map(ch => ({
+      type: 'extra',
+      typed: ch,
+      char: ch
+    }));
+  }
+
+  // Pure missed word from target
+  if (targetWord && !typedWord) {
+    return targetWord.split('').map(ch => ({
+      type: 'missed',
+      expected: ch,
+      char: ch
+    }));
+  }
+
   const m = targetWord.length;
   const n = typedWord.length;
   const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
@@ -71,12 +92,106 @@ export function alignWord(targetWord, typedWord) {
   return ops;
 }
 
+/**
+ * Align word sequences so an extra or missed word doesn't desynchronize the remainder of the passage.
+ */
+function alignWordSequences(targets, typeds) {
+  const m = targets.length;
+  const n = typeds.length;
+  if (n === 0) {
+    return { pairs: [], unreached: targets };
+  }
+
+  function similarity(w1, w2) {
+    if (!w1 || !w2) return 0;
+    if (w1 === w2) return 1.0;
+    if (w1.toLowerCase() === w2.toLowerCase()) return 0.9;
+    let common = 0;
+    const len = Math.min(w1.length, w2.length);
+    for (let k = 0; k < len; k++) {
+      if (w1[k] === w2[k]) common++;
+    }
+    return common / Math.max(w1.length, w2.length);
+  }
+
+  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = -i * 0.4;
+  for (let j = 0; j <= n; j++) dp[0][j] = -j * 0.4;
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const sim = similarity(targets[i - 1], typeds[j - 1]);
+      const matchScore = sim >= 0.35 ? (sim * 2.2) - 0.4 : -1.2;
+      dp[i][j] = Math.max(
+        dp[i - 1][j - 1] + matchScore,
+        dp[i - 1][j] - 0.7, // target omitted
+        dp[i][j - 1] - 0.7  // extra typed word
+      );
+    }
+  }
+
+  // Find optimal target cut-off for incomplete test passages (e.g. 1-minute time expired)
+  let bestI = m;
+  let maxScore = -Infinity;
+  const lookahead = Math.min(m, n + 8);
+  for (let candI = Math.max(0, n - 4); candI <= lookahead; candI++) {
+    if (dp[candI][n] > maxScore) {
+      maxScore = dp[candI][n];
+      bestI = candI;
+    }
+  }
+
+  let i = bestI, j = n;
+  const unreached = targets.slice(bestI);
+  const pairs = [];
+
+  while (i > 0 || j > 0) {
+    const sim = i > 0 && j > 0 ? similarity(targets[i - 1], typeds[j - 1]) : 0;
+    const matchScore = sim >= 0.35 ? (sim * 2.2) - 0.4 : -1.2;
+
+    if (i > 0 && j > 0 && Math.abs(dp[i][j] - (dp[i - 1][j - 1] + matchScore)) < 1e-4) {
+      pairs.unshift({ target: targets[i - 1], typed: typeds[j - 1] });
+      i--; j--;
+    } else if (j > 0 && Math.abs(dp[i][j] - (dp[i][j - 1] - 0.7)) < 1e-4) {
+      pairs.unshift({ target: '', typed: typeds[j - 1] });
+      j--;
+    } else if (i > 0) {
+      pairs.unshift({ target: targets[i - 1], typed: '' });
+      i--;
+    } else {
+      break;
+    }
+  }
+
+  return { pairs, unreached };
+}
+
 export function analyzeSessionMistakes(promptText = '', typedInput = '') {
   const cleanPrompt = (promptText || '').trim();
   const cleanTyped = (typedInput || '').trim();
 
+  // If no input was typed at all, return genuine zeros without fabricating errors
+  if (!cleanTyped) {
+    const targetWords = cleanPrompt ? cleanPrompt.split(/\s+/) : [];
+    return {
+      correctCharactersCount: 0,
+      wrongCharactersCount: 0,
+      missedCharactersCount: 0,
+      extraCharactersCount: 0,
+      totalMistakesCount: 0,
+      mostCommonConfusion: 'None (0 Typos)',
+      wordDiffs: [],
+      mistakeWords: [],
+      targetWords,
+      unreachedWords: targetWords,
+      tips: ['Type during the countdown to record your live typing speed and accuracy analysis.']
+    };
+  }
+
   const targetWords = cleanPrompt ? cleanPrompt.split(/\s+/) : [];
   const typedWords = cleanTyped ? cleanTyped.split(/\s+/) : [];
+
+  const { pairs, unreached } = alignWordSequences(targetWords, typedWords);
 
   let correctCount = 0;
   let wrongCount = 0;
@@ -87,13 +202,11 @@ export function analyzeSessionMistakes(promptText = '', typedInput = '') {
   const wordDiffs = [];
   const mistakeWords = [];
 
-  const maxWords = Math.max(typedWords.length, 1);
+  pairs.forEach((pair, idx) => {
+    const target = pair.target || '';
+    const typed = pair.typed || '';
 
-  for (let idx = 0; idx < maxWords; idx++) {
-    const target = targetWords[idx] || '';
-    const typed = typedWords[idx] || '';
-
-    if (!target && !typed) continue;
+    if (!target && !typed) return;
 
     const ops = alignWord(target, typed);
     let hasMistake = false;
@@ -142,7 +255,7 @@ export function analyzeSessionMistakes(promptText = '', typedInput = '') {
         primaryErrorType: errorBadges[0] || 'Typing error'
       });
     }
-  }
+  });
 
   // Calculate most common confusion pair
   let mostCommonConfusion = 'None (0 Typos)';
@@ -173,17 +286,19 @@ export function analyzeSessionMistakes(promptText = '', typedInput = '') {
     tips.push('Keep breathing evenly and relax your wrists to sustain higher stamina throughout longer endurance tests.');
   }
 
+  const totalMistakes = wrongCount + missedCount + extraCount;
+
   return {
     correctCharactersCount: correctCount,
     wrongCharactersCount: wrongCount,
     missedCharactersCount: missedCount,
     extraCharactersCount: extraCount,
-    totalMistakesCount: wrongCount + missedCount + extraCount,
+    totalMistakesCount: totalMistakes,
     mostCommonConfusion,
     wordDiffs,
     mistakeWords,
     targetWords,
-    unreachedWords: targetWords.slice(maxWords),
+    unreachedWords: unreached,
     tips
   };
 }

@@ -376,6 +376,101 @@ const createFreshStreak = (userId) => ({
   last_active_date: null
 });
 
+export function calculateStreakFromLogs(logs = []) {
+  if (!Array.isArray(logs) || logs.length === 0) {
+    return { current_streak: 0, longest_streak: 0, last_active_date: null };
+  }
+
+  const getLocalDateStr = (dateVal) => {
+    if (!dateVal) return null;
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return null;
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const uniqueDateSet = new Set();
+  for (const log of logs) {
+    const rawDate = log.created_at || log.date;
+    const dateStr = getLocalDateStr(rawDate);
+    if (dateStr) {
+      uniqueDateSet.add(dateStr);
+    }
+  }
+
+  const sortedDates = Array.from(uniqueDateSet).sort().reverse();
+  if (sortedDates.length === 0) {
+    return { current_streak: 0, longest_streak: 0, last_active_date: null };
+  }
+
+  const today = new Date();
+  const todayStr = getLocalDateStr(today);
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const yesterdayStr = getLocalDateStr(yesterday);
+
+  const mostRecentTestDate = sortedDates[0];
+
+  const getPrevDayStr = (dStr) => {
+    const [y, m, d] = dStr.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    dt.setDate(dt.getDate() - 1);
+    return getLocalDateStr(dt);
+  };
+
+  let currentStreak = 0;
+  if (sortedDates.includes(todayStr)) {
+    currentStreak = 1;
+    let checkDate = getPrevDayStr(todayStr);
+    while (sortedDates.includes(checkDate)) {
+      currentStreak += 1;
+      checkDate = getPrevDayStr(checkDate);
+    }
+  } else if (sortedDates.includes(yesterdayStr)) {
+    currentStreak = 1;
+    let checkDate = getPrevDayStr(yesterdayStr);
+    while (sortedDates.includes(checkDate)) {
+      currentStreak += 1;
+      checkDate = getPrevDayStr(checkDate);
+    }
+  } else {
+    currentStreak = 0;
+  }
+
+  let longestStreak = 0;
+  const chronDates = [...sortedDates].reverse();
+  let tempStreak = 0;
+  let prevDate = null;
+
+  for (const dStr of chronDates) {
+    if (!prevDate) {
+      tempStreak = 1;
+    } else {
+      const prevD = new Date(prevDate);
+      prevD.setDate(prevD.getDate() + 1);
+      const expectedNext = getLocalDateStr(prevD);
+      if (dStr === expectedNext) {
+        tempStreak += 1;
+      } else {
+        tempStreak = 1;
+      }
+    }
+    prevDate = dStr;
+    if (tempStreak > longestStreak) {
+      longestStreak = tempStreak;
+    }
+  }
+
+  return {
+    current_streak: Math.max(currentStreak, 0),
+    longest_streak: Math.max(longestStreak, currentStreak),
+    last_active_date: mostRecentTestDate
+  };
+}
+
+
 const DEFAULT_SUPABASE_URL = 'https://gxelksgspezrjifpumdt.supabase.co';
 const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd4ZWxrc2dzcGV6cmppZnB1bWR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE0MzUyNzcsImV4cCI6MjEwNzAxMTI3N30.MuUgRxNXKtef-9sWI7LDswZgLQsjP_pcCl9J8BeX36g';
 
@@ -1949,8 +2044,18 @@ class SupabaseService {
     const now = new Date();
     const dateFormatted = now.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
 
+    const totalMistakesVal = payload.total_mistakes ?? payload.totalMistakes ?? payload.errors;
+    const correctCharsVal = payload.correct_characters ?? payload.correctCharacters ?? 0;
+    const wrongCharsVal = payload.wrong_characters ?? payload.wrongCharacters ?? 0;
+    const missedCharsVal = payload.missed_characters ?? payload.missedCharacters ?? 0;
+    const extraCharsVal = payload.extra_characters ?? payload.extraCharacters ?? 0;
+    const promptTextVal = payload.prompt_text || payload.promptText || '';
+    const typedInputVal = payload.typed_input || payload.typedInput || '';
+    const mistakeDetailsVal = payload.mistake_details || payload.mistakeDetails || [];
+    const mistakeStatsVal = payload.mistake_stats || payload.mistakeStats || null;
+
     const newLog = {
-      id: `log_${Date.now()}`,
+      id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       user_id: userId,
       date: dateFormatted,
       duration: `${Math.max(1, Math.round(duration / 60))} min`,
@@ -1958,20 +2063,32 @@ class SupabaseService {
       wpm: Math.round(wpm),
       raw_wpm: Math.round(rawWpm || wpm),
       accuracy: Math.round(accuracy * 10) / 10,
-      errors: Math.max(0, errors),
+      errors: Math.max(0, totalMistakesVal),
       characters: Math.max(0, characters),
+      correct_characters: correctCharsVal,
+      wrong_characters: wrongCharsVal,
+      missed_characters: missedCharsVal,
+      extra_characters: extraCharsVal,
+      total_mistakes: totalMistakesVal,
+      uncorrected_errors: payload.uncorrected_errors ?? payload.uncorrectedErrors ?? totalMistakesVal,
       category,
       difficulty,
       result: resultBadge,
+      result_badge: resultBadge,
       is_valid: isValid,
       scheduled_test_id: payload.scheduled_test_id || payload.scheduledTestId || null,
       scheduled_test_title: payload.scheduled_test_title || payload.scheduledTestTitle || null,
-      prompt_text: payload.promptText || '',
-      typed_input: payload.typedInput || '',
-      mistake_details: payload.mistakeDetails || payload.mistake_details || [],
-      mistake_stats: payload.mistakeStats || payload.mistake_stats || null,
+      prompt_text: promptTextVal,
+      promptText: promptTextVal,
+      typed_input: typedInputVal,
+      typedInput: typedInputVal,
+      mistake_details: mistakeDetailsVal,
+      mistake_stats: mistakeStatsVal,
       created_at: now.toISOString()
     };
+
+    // Cache individual attempt for immediate O(1) canonical retrieval by attempt ID
+    this._setLocal(`attempt_${newLog.id}`, newLog);
 
     // 2. Append new test log to local store (with duplicate prevention)
     const existingLogs = this._getLocal(`test_logs_${userId}`, []);
@@ -2001,26 +2118,14 @@ class SupabaseService {
 
     // 4. Calculate Daily Streak in Real Time
     const streakData = this._getLocal(`streak_${userId}`, createFreshStreak(userId));
-    const todayStr = now.toISOString().split('T')[0];
-    let newStreak = streakData.current_streak;
-
-    if (!streakData.last_active_date) {
-      newStreak = 1;
-    } else if (streakData.last_active_date !== todayStr) {
-      const lastDate = new Date(streakData.last_active_date);
-      const diffDays = Math.round((now - lastDate) / (1000 * 60 * 60 * 24));
-      if (diffDays === 1) {
-        newStreak += 1;
-      } else if (diffDays > 1) {
-        newStreak = 1;
-      }
-    }
+    const calculatedStreak = calculateStreakFromLogs(updatedLogs);
+    const newStreak = calculatedStreak.current_streak;
 
     const updatedStreak = {
       ...streakData,
       current_streak: newStreak,
-      longest_streak: Math.max(streakData.longest_streak || 0, newStreak),
-      last_active_date: todayStr
+      longest_streak: Math.max(streakData.longest_streak || 0, calculatedStreak.longest_streak),
+      last_active_date: calculatedStreak.last_active_date || now.toISOString().split('T')[0]
     };
     this._setLocal(`streak_${userId}`, updatedStreak);
 
@@ -2115,38 +2220,90 @@ class SupabaseService {
             duration: duration,
             errors: newLog.errors,
             characters: newLog.characters,
+            correct_characters: newLog.correct_characters,
+            wrong_characters: newLog.wrong_characters,
+            missed_characters: newLog.missed_characters,
+            extra_characters: newLog.extra_characters,
             category,
             difficulty,
             result_badge: resultBadge,
             is_valid: isValid,
             mistake_details: payload.mistakeDetails || payload.mistake_details || [],
-            prompt_text: payload.promptText || '',
-            typed_input: payload.typedInput || '',
+            mistake_stats: payload.mistakeStats || payload.mistake_stats || null,
+            prompt_text: payload.promptText || payload.prompt_text || '',
+            typed_input: payload.typedInput || payload.typed_input || '',
             created_at: now.toISOString()
           }]), 4000);
         } catch (e) {
           console.warn('test_sessions insert note:', e);
         }
 
-        // Insert into test_logs table for backward compatibility
+        // Insert into test_logs table with resilient schema fallback
         try {
-          await this._withTimeout(this.supabase.from('test_logs').insert([{
+          const extendedPayload = {
             user_id: userId,
             wpm: newLog.wpm,
             raw_wpm: newLog.raw_wpm,
             accuracy: newLog.accuracy,
-            duration: duration,
+            duration: newLog.duration,
             errors: newLog.errors,
             characters: newLog.characters,
             category,
             difficulty,
             result_badge: resultBadge,
             is_valid: isValid,
-            mistake_details: payload.mistakeDetails || payload.mistake_details || [],
-            prompt_text: payload.promptText || '',
-            typed_input: payload.typedInput || '',
+            prompt_text: newLog.prompt_text,
+            typed_input: newLog.typed_input,
+            mistake_details: newLog.mistake_details,
+            mistake_stats: newLog.mistake_stats,
+            correct_characters: newLog.correct_characters,
+            wrong_characters: newLog.wrong_characters,
+            missed_characters: newLog.missed_characters,
+            extra_characters: newLog.extra_characters,
             created_at: now.toISOString()
-          }]), 4000);
+          };
+          let { data: insertedRow, error: insErr } = await this._withTimeout(
+            this.supabase.from('test_logs').insert([extendedPayload]).select().maybeSingle(),
+            4000
+          );
+          if (insErr) {
+            console.warn('test_logs insert with full schema note, trying core columns:', insErr.message);
+            // Fallback to core columns if extended columns not yet added to remote database
+            const corePayload = {
+              user_id: userId,
+              wpm: newLog.wpm,
+              raw_wpm: newLog.raw_wpm,
+              accuracy: newLog.accuracy,
+              duration: newLog.duration,
+              errors: newLog.errors,
+              characters: newLog.characters,
+              category,
+              difficulty,
+              result_badge: resultBadge,
+              is_valid: isValid,
+              created_at: now.toISOString()
+            };
+            const fallbackRes = await this._withTimeout(
+              this.supabase.from('test_logs').insert([corePayload]).select().maybeSingle(),
+              4000
+            );
+            if (!fallbackRes.error && fallbackRes.data?.id) {
+              insertedRow = fallbackRes.data;
+            }
+          }
+          if (insertedRow?.id) {
+            const oldId = newLog.id;
+            newLog.id = insertedRow.id;
+            // Cache by both new authoritative ID and old local ID
+            this._setLocal(`attempt_${newLog.id}`, newLog);
+            if (oldId !== newLog.id) {
+              this._setLocal(`attempt_${oldId}`, newLog);
+            }
+            // Update local logs array with the authoritative record
+            const curLocal = this._getLocal(`test_logs_${userId}`, []);
+            const updated = curLocal.map(item => (item.id === oldId ? newLog : item));
+            this._setLocal(`test_logs_${userId}`, updated);
+          }
         } catch (e) {
           console.warn('test_logs insert note:', e);
         }
@@ -2172,12 +2329,21 @@ class SupabaseService {
       }).catch(e => console.warn('Record scheduled attempt note:', e));
     }
 
-    // Two-Way Instant Telemetry Broadcast to Admin Portal (admin-live-feed)
+    // Real-Time Cross-Portal & Cross-Tab Broadcast
     this.broadcastToAdminFeed('TEST_COMPLETED', {
       ...newLog,
       userName: updatedUser.displayName || updatedUser.username || 'Typist',
       userEmail: updatedUser.email || ''
     });
+
+    try {
+      window.dispatchEvent(new CustomEvent('typemaster-test-logged', { detail: { ...newLog, userId } }));
+      const bc = new BroadcastChannel('typemaster_history_sync');
+      bc.postMessage({ type: 'TEST_COMPLETED', payload: { ...newLog, userId } });
+      bc.close();
+    } catch {
+      // broadcast fallback
+    }
 
     const fullSessionResult = {
       success: true,
@@ -2295,37 +2461,75 @@ class SupabaseService {
     // 1. Supabase live fetch if configured
     if (this.isConfigured()) {
       try {
-        const [userRes, streakRes, logsRes] = await this._withTimeout(
+        const [profileRes, userRes, streakRes, sessionsRes, logsRes] = await this._withTimeout(
           Promise.all([
-            this.supabase.from('users').select('*').eq('id', userId).maybeSingle(),
-            this.supabase.from('streaks').select('*').eq('user_id', userId).maybeSingle(),
-            this.supabase.from('test_logs').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(50)
+            Promise.resolve(this.supabase.from('profiles').select('*').eq('id', userId).maybeSingle()).catch(() => ({ data: null })),
+            Promise.resolve(this.supabase.from('users').select('*').eq('id', userId).maybeSingle()).catch(() => ({ data: null })),
+            Promise.resolve(this.supabase.from('streaks').select('*').eq('user_id', userId).maybeSingle()).catch(() => ({ data: null })),
+            Promise.resolve(this.supabase.from('test_sessions').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(200)).catch(() => ({ data: [] })),
+            Promise.resolve(this.supabase.from('test_logs').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(100)).catch(() => ({ data: [] }))
           ]),
-          3000
+          4000
         );
 
+        const profileRow = profileRes?.data;
         const userRow = userRes?.data;
         const streakRow = streakRes?.data;
-        const liveLogs = logsRes?.data;
+        const liveSessions = Array.isArray(sessionsRes?.data) ? sessionsRes.data : [];
+        const liveLogs = Array.isArray(logsRes?.data) ? logsRes.data : [];
 
-        if (userRow) {
-          const formattedRecent = (liveLogs || []).map(l => {
-            let resBadge = l.result_badge;
+        // Combine test_sessions and test_logs, prioritizing test_sessions for rich telemetry
+        const combinedLive = [...liveSessions];
+        liveLogs.forEach(lr => {
+          if (!combinedLive.some(s => s.id === lr.id || (s.created_at && lr.created_at && Math.abs(new Date(s.created_at).getTime() - new Date(lr.created_at).getTime()) < 5000))) {
+            combinedLive.push(lr);
+          }
+        });
+
+        if (profileRow || userRow || combinedLive.length > 0) {
+          const effectiveUser = profileRow || userRow || this._getLocal(`user_${userId}`, currentUser);
+          const formattedRecent = combinedLive.map(l => {
+            let resBadge = l.result || l.result_badge;
             if ((resBadge === 'Invalid' || resBadge === 'Flagged') && (l.characters > 0 || l.wpm > 0) && l.wpm <= 250) {
               resBadge = (l.wpm < 15 && l.accuracy >= 80) ? 'Fair' : (l.accuracy >= 75 ? 'Fair' : 'Needs Practice');
             }
-            return {
+            const durSec = typeof l.duration === 'number' ? l.duration : parseInt(l.duration) || 60;
+            const durStr = typeof l.duration === 'string' && l.duration.includes('min')
+              ? l.duration
+              : `${Math.max(1, Math.round(durSec / 60))} min`;
+
+            const item = {
               id: l.id,
-              date: new Date(l.created_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
-              duration: `${Math.max(1, Math.round(l.duration / 60))} min`,
-              durationSeconds: l.duration,
+              date: l.date || (l.created_at ? new Date(l.created_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })),
+              duration: durStr,
+              durationSeconds: durSec,
               wpm: l.wpm,
+              raw_wpm: l.raw_wpm || l.wpm,
               accuracy: Math.round(l.accuracy * 10) / 10,
-              errors: l.errors,
-              characters: l.characters,
-              result: resBadge,
-              created_at: l.created_at
+              errors: l.errors ?? l.total_mistakes ?? 0,
+              total_mistakes: l.total_mistakes ?? l.errors ?? 0,
+              characters: l.characters || 0,
+              correct_characters: l.correct_characters || 0,
+              wrong_characters: l.wrong_characters || 0,
+              missed_characters: l.missed_characters || 0,
+              extra_characters: l.extra_characters || 0,
+              category: l.category || 'Random Text',
+              difficulty: l.difficulty || 'Easy',
+              result: resBadge || 'Good',
+              result_badge: resBadge || 'Good',
+              is_valid: l.is_valid !== false,
+              prompt_text: l.prompt_text || l.promptText || '',
+              promptText: l.prompt_text || l.promptText || '',
+              typed_input: l.typed_input || l.typedInput || '',
+              typedInput: l.typed_input || l.typedInput || '',
+              mistake_details: l.mistake_details || [],
+              mistake_stats: l.mistake_stats || null,
+              created_at: l.created_at || new Date().toISOString()
             };
+
+            // Cache individual attempt for zero-latency Review Mistakes modal opening
+            this._setLocal(`attempt_${item.id}`, item);
+            return item;
           });
 
           // Merge Supabase logs with local logs WITHOUT duplicating entries
@@ -2333,8 +2537,25 @@ class SupabaseService {
           localLogs.forEach(loc => {
             if (!mergedRecent.some(rem => isDuplicateLog(rem, loc))) {
               mergedRecent.push(loc);
+              this._setLocal(`attempt_${loc.id}`, loc);
             }
           });
+
+          // Sort chronologically newest first
+          mergedRecent.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+          // Calculate real-time daily streak directly from all completed test logs across all dates
+          const calculatedStreak = calculateStreakFromLogs(mergedRecent);
+          const effectiveStreak = {
+            user_id: userId,
+            current_streak: calculatedStreak.current_streak,
+            longest_streak: Math.max(streakRow?.longest_streak || 0, calculatedStreak.longest_streak),
+            last_active_date: calculatedStreak.last_active_date
+          };
+          this._setLocal(`streak_${userId}`, effectiveStreak);
+
+          // Update local cache of logs
+          this._setLocal(`test_logs_${userId}`, mergedRecent);
 
           const chronological = [...mergedRecent].reverse().slice(-7);
           const performanceGraph = chronological.map(l => ({
@@ -2347,8 +2568,8 @@ class SupabaseService {
           }));
 
           return {
-            user: userRow,
-            streak: streakRow || createFreshStreak(userId),
+            user: effectiveUser,
+            streak: effectiveStreak,
             recentTests: mergedRecent,
             achievements: this._getLocal(`achievements_${userId}`, DEFAULT_ACHIEVEMENTS),
             performanceGraph,
@@ -2362,8 +2583,16 @@ class SupabaseService {
 
     // 2. Real-time Local Store
     const user = this._getLocal(`user_${userId}`, currentUser);
-    const streak = this._getLocal(`streak_${userId}`, createFreshStreak(userId));
     const recentTests = localLogs;
+    const calculatedStreak = calculateStreakFromLogs(recentTests);
+    const storedStreak = this._getLocal(`streak_${userId}`, createFreshStreak(userId));
+    const streak = {
+      ...storedStreak,
+      current_streak: calculatedStreak.current_streak,
+      longest_streak: Math.max(storedStreak.longest_streak || 0, calculatedStreak.longest_streak),
+      last_active_date: calculatedStreak.last_active_date
+    };
+    this._setLocal(`streak_${userId}`, streak);
     const achievements = this._getLocal(`achievements_${userId}`, DEFAULT_ACHIEVEMENTS);
 
     // Build real-time graph points strictly from completed tests
@@ -2584,9 +2813,10 @@ class SupabaseService {
     return { success: true, feedback: fbRecord };
   }
 
-  async fetchUserFeedbackLive(userId) {
+  async fetchUserFeedbackLive(userId, userEmail = null) {
     if (!userId) return [];
 
+    let liveRecords = [];
     // 1. Live Supabase fetch strictly filtered by authenticated user's ID
     if (this.isConfigured()) {
       try {
@@ -2600,9 +2830,10 @@ class SupabaseService {
         );
 
         if (!error && Array.isArray(data)) {
-          const liveRecords = data.map(d => ({
+          liveRecords = data.map(d => ({
             id: d.id,
             user_id: d.user_id,
+            userId: d.user_id,
             category: d.category || 'General Feedback',
             subject: d.subject || (d.comment ? d.comment.slice(0, 35) : 'Feedback'),
             message: d.message || d.comment || '',
@@ -2610,28 +2841,55 @@ class SupabaseService {
             rating: d.rating || null,
             status: d.status || 'Pending',
             admin_response: d.admin_response || d.adminReply || null,
+            adminReply: d.admin_response || d.adminReply || null,
             attachment_url: d.attachment_url || null,
             created_at: d.created_at,
             date: d.created_at ? new Date(d.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Recent'
           }));
-
-          // Merge with any local user records
-          const local = this._getLocal(`user_feedback_${userId}`, []);
-          const map = new Map();
-          liveRecords.forEach(r => map.set(r.id, r));
-          local.forEach(r => {
-            if (!map.has(r.id)) map.set(r.id, r);
-          });
-          const merged = Array.from(map.values()).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-          this._setLocal(`user_feedback_${userId}`, merged);
-          return merged;
         }
       } catch (err) {
         console.warn('Live user feedback fetch note:', err);
       }
     }
 
-    return this._getLocal(`user_feedback_${userId}`, []);
+    // 2. User-specific local feedback store
+    const local = this._getLocal(`user_feedback_${userId}`, []);
+
+    // 3. Scan admin_feedback for any matching feedbacks or admin replies for this user
+    const adminLocal = this._getLocal('admin_feedback', []);
+    const matchingAdmin = adminLocal.filter(f => {
+      const fUserId = f.user_id || f.userId;
+      const fEmail = (f.user_email || f.email || '').toLowerCase();
+      const targetEmail = (userEmail || '').toLowerCase();
+      return fUserId === userId || (targetEmail && fEmail === targetEmail);
+    });
+
+    const map = new Map();
+    liveRecords.forEach(r => map.set(r.id, r));
+    local.forEach(r => {
+      if (!map.has(r.id)) map.set(r.id, r);
+    });
+    matchingAdmin.forEach(r => {
+      if (map.has(r.id)) {
+        const existing = map.get(r.id);
+        map.set(r.id, {
+          ...existing,
+          ...r,
+          status: r.status || existing.status,
+          admin_response: r.admin_response || r.adminReply || existing.admin_response || existing.adminReply,
+          adminReply: r.adminReply || r.admin_response || existing.adminReply || existing.admin_response
+        });
+      } else {
+        map.set(r.id, r);
+      }
+    });
+
+    const merged = Array.from(map.values())
+      .filter(item => !this._isSampleFeedback(item))
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+    this._setLocal(`user_feedback_${userId}`, merged);
+    return merged;
   }
 
   subscribeToUserFeedback(userId, callback) {
@@ -2657,19 +2915,38 @@ class SupabaseService {
 
     // In-window event listener
     const handleLocalSync = (e) => {
-      if (e.detail?.user_id === userId) {
-        callback({ eventType: 'INSERT', new: e.detail });
+      const pId = e.detail?.user_id || e.detail?.userId;
+      if (!pId || pId === userId) {
+        callback({ eventType: 'SYNC', new: e.detail });
       }
     };
     window.addEventListener('typemaster-feedback-sync', handleLocalSync);
+    window.addEventListener('typemaster-admin-feedback-sync', handleLocalSync);
 
-    // Cross-tab broadcast listener
-    let bc = null;
+    // Cross-tab broadcast listener (User Feed Channel)
+    let bcUser = null;
     try {
-      bc = new BroadcastChannel('user-feedback-sync');
-      bc.onmessage = (event) => {
-        if (event.data?.payload?.user_id === userId) {
-          callback({ eventType: 'INSERT', new: event.data.payload });
+      bcUser = new BroadcastChannel('user-feedback-sync');
+      bcUser.onmessage = (event) => {
+        const pId = event.data?.payload?.user_id || event.data?.payload?.userId;
+        if (!pId || pId === userId) {
+          callback({ eventType: event.data?.type || 'BROADCAST', new: event.data?.payload });
+        }
+      };
+    } catch {
+      // ignore
+    }
+
+    // Cross-tab broadcast listener (Admin Live Feed Channel)
+    let bcAdmin = null;
+    try {
+      bcAdmin = new BroadcastChannel('admin-live-feed');
+      bcAdmin.onmessage = (event) => {
+        if (event.data?.type?.startsWith('FEEDBACK_')) {
+          const pId = event.data?.payload?.user_id || event.data?.payload?.userId;
+          if (!pId || pId === userId) {
+            callback({ eventType: event.data.type, new: event.data.payload });
+          }
         }
       };
     } catch {
@@ -2681,7 +2958,9 @@ class SupabaseService {
         this.supabase.removeChannel(channel);
       }
       window.removeEventListener('typemaster-feedback-sync', handleLocalSync);
-      if (bc) bc.close();
+      window.removeEventListener('typemaster-admin-feedback-sync', handleLocalSync);
+      if (bcUser) bcUser.close();
+      if (bcAdmin) bcAdmin.close();
     };
   }
 
@@ -2858,29 +3137,32 @@ class SupabaseService {
     }
     this._setLocal('admin_feedback', adminFeedbacks);
 
-    // 3. Update across user-specific local stores (user_feedback_*)
+    // 3. Update across user-specific local stores (typemaster_user_feedback_*)
     const targetUserId = targetItem?.user_id || targetItem?.userId;
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && key.startsWith('user_feedback_')) {
-          let uList = this._getLocal(key, []);
-          let changed = false;
-          uList = uList.map(item => {
-            if (item.id === id) {
-              changed = true;
-              return {
-                ...item,
-                admin_response: adminResponse,
-                adminReply: adminResponse,
-                status: status,
-                updated_at: updatedAt
-              };
+        if (key && (key.startsWith('typemaster_user_feedback_') || key.startsWith('user_feedback_'))) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            let uList = JSON.parse(raw);
+            let changed = false;
+            uList = uList.map(item => {
+              if (item.id === id) {
+                changed = true;
+                return {
+                  ...item,
+                  admin_response: adminResponse,
+                  adminReply: adminResponse,
+                  status: status,
+                  updated_at: updatedAt
+                };
+              }
+              return item;
+            });
+            if (changed) {
+              localStorage.setItem(key, JSON.stringify(uList));
             }
-            return item;
-          });
-          if (changed) {
-            this._setLocal(key, uList);
           }
         }
       }
@@ -2937,11 +3219,14 @@ class SupabaseService {
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && key.startsWith('user_feedback_')) {
-          let uList = this._getLocal(key, []);
-          const filtered = uList.filter(item => item.id !== id);
-          if (filtered.length !== uList.length) {
-            this._setLocal(key, filtered);
+        if (key && (key.startsWith('typemaster_user_feedback_') || key.startsWith('user_feedback_'))) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            let uList = JSON.parse(raw);
+            const filtered = uList.filter(item => item.id !== id);
+            if (filtered.length !== uList.length) {
+              localStorage.setItem(key, JSON.stringify(filtered));
+            }
           }
         }
       }
@@ -3126,32 +3411,293 @@ class SupabaseService {
     return { success: true, user: newAdmin };
   }
 
-  // Fetch real test logs for a specific user
+  // Fetch real test logs for a specific user (normalized, persisted, and real-time ready)
   async fetchUserTestLogs(userId) {
     if (!userId) return [];
 
+    let liveRecords = [];
     if (this.isConfigured()) {
       try {
-        // Query test_sessions first
-        let res = await this._withTimeout(
-          this.supabase.from('test_sessions').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
+        // Query canonical test_sessions first
+        const sessionRes = await this._withTimeout(
+          Promise.resolve(this.supabase.from('test_sessions').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(300)),
           4000
-        );
-        if (res.error || !res.data) {
-          res = await this._withTimeout(
-            this.supabase.from('test_logs').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
-            4000
-          );
+        ).catch(() => ({ data: [] }));
+
+        if (Array.isArray(sessionRes?.data) && sessionRes.data.length > 0) {
+          liveRecords = sessionRes.data;
         }
-        if (!res.error && res.data && res.data.length > 0) {
-          return res.data;
+
+        // Also check test_logs for supplementary records
+        const logsRes = await this._withTimeout(
+          Promise.resolve(this.supabase.from('test_logs').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(100)),
+          3000
+        ).catch(() => ({ data: [] }));
+
+        if (Array.isArray(logsRes?.data) && logsRes.data.length > 0) {
+          logsRes.data.forEach(lr => {
+            if (!liveRecords.some(s => s.id === lr.id || (s.created_at && lr.created_at && Math.abs(new Date(s.created_at).getTime() - new Date(lr.created_at).getTime()) < 5000))) {
+              liveRecords.push(lr);
+            }
+          });
         }
       } catch (err) {
         console.warn('fetchUserTestLogs live note:', err);
       }
     }
 
-    return this._getLocal(`test_logs_${userId}`, []);
+    const localLogs = this._getLocal(`test_logs_${userId}`, []);
+
+    const formatLog = (l) => {
+      // Look up cached attempt telemetry if available
+      const cached = this._getLocal(`attempt_${l.id}`, null) || {};
+      let resBadge = l.result || l.result_badge || cached.result_badge;
+      if ((resBadge === 'Invalid' || resBadge === 'Flagged') && (l.characters > 0 || l.wpm > 0) && l.wpm <= 250) {
+        resBadge = (l.wpm < 15 && l.accuracy >= 80) ? 'Fair' : (l.accuracy >= 75 ? 'Fair' : 'Needs Practice');
+      }
+      const durSec = typeof l.duration === 'number' ? l.duration : parseInt(l.duration) || 60;
+      const durStr = typeof l.duration === 'string' && l.duration.includes('min')
+        ? l.duration
+        : `${Math.max(1, Math.round(durSec / 60))} min`;
+
+      const dateStr = l.date || (l.created_at
+        ? new Date(l.created_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
+        : new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }));
+
+      const totalMistakesVal = l.total_mistakes ?? cached.total_mistakes ?? l.errors ?? 0;
+      const promptVal = l.prompt_text || l.promptText || cached.prompt_text || cached.promptText || '';
+      const typedVal = l.typed_input || l.typedInput || cached.typed_input || cached.typedInput || '';
+      const detailsVal = (l.mistake_details && l.mistake_details.length > 0) ? l.mistake_details : (cached.mistake_details || []);
+      const statsVal = l.mistake_stats || cached.mistake_stats || null;
+
+      const formatted = {
+        id: l.id,
+        user_id: l.user_id || l.userId || userId,
+        date: dateStr,
+        duration: durStr,
+        durationSeconds: durSec,
+        wpm: l.wpm,
+        raw_wpm: l.raw_wpm || l.wpm,
+        accuracy: Math.round(l.accuracy * 10) / 10,
+        errors: l.errors ?? totalMistakesVal,
+        total_mistakes: totalMistakesVal,
+        characters: l.characters || 0,
+        correct_characters: l.correct_characters ?? cached.correct_characters ?? 0,
+        wrong_characters: l.wrong_characters ?? cached.wrong_characters ?? 0,
+        missed_characters: l.missed_characters ?? cached.missed_characters ?? 0,
+        extra_characters: l.extra_characters ?? cached.extra_characters ?? 0,
+        result: resBadge || 'Good',
+        result_badge: resBadge || 'Good',
+        category: l.category || 'Random Text',
+        difficulty: l.difficulty || 'Easy',
+        is_valid: l.is_valid !== false,
+        scheduled_test_id: l.scheduled_test_id || null,
+        scheduled_test_title: l.scheduled_test_title || null,
+        prompt_text: promptVal,
+        promptText: promptVal,
+        typed_input: typedVal,
+        typedInput: typedVal,
+        mistake_details: detailsVal,
+        mistake_stats: statsVal,
+        created_at: l.created_at || new Date().toISOString()
+      };
+
+      // Populate attempt cache for 0ms Review Mistakes modal responsiveness
+      this._setLocal(`attempt_${formatted.id}`, formatted);
+      return formatted;
+    };
+
+    const formattedLive = liveRecords.map(formatLog);
+    const formattedLocal = localLogs.map(formatLog);
+
+    const merged = [...formattedLive];
+    const isDup = (a, b) => {
+      if (a.id && b.id && a.id === b.id) return true;
+      if (a.created_at && b.created_at) {
+        const diff = Math.abs(new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        if (diff < 5000 && a.wpm === b.wpm && (a.errors === b.errors || a.total_mistakes === b.total_mistakes)) return true;
+      }
+      return a.date === b.date && a.duration === b.duration && a.wpm === b.wpm && a.errors === b.errors;
+    };
+
+    formattedLocal.forEach(loc => {
+      const matchIndex = merged.findIndex(m => isDup(m, loc));
+      if (matchIndex >= 0) {
+        const live = merged[matchIndex];
+        merged[matchIndex] = {
+          ...loc,
+          ...live,
+          prompt_text: live.prompt_text || loc.prompt_text || '',
+          promptText: live.promptText || loc.promptText || '',
+          typed_input: live.typed_input || loc.typed_input || '',
+          typedInput: live.typedInput || loc.typedInput || '',
+          mistake_details: (live.mistake_details && live.mistake_details.length > 0) ? live.mistake_details : (loc.mistake_details || []),
+          mistake_stats: live.mistake_stats || loc.mistake_stats || null,
+          correct_characters: live.correct_characters || loc.correct_characters || 0,
+          wrong_characters: live.wrong_characters || loc.wrong_characters || 0,
+          missed_characters: live.missed_characters || loc.missed_characters || 0,
+          extra_characters: live.extra_characters || loc.extra_characters || 0,
+          total_mistakes: live.total_mistakes || loc.total_mistakes || live.errors || 0
+        };
+        this._setLocal(`attempt_${merged[matchIndex].id}`, merged[matchIndex]);
+      } else {
+        merged.push(loc);
+        this._setLocal(`attempt_${loc.id}`, loc);
+      }
+    });
+
+    merged.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+    // Calculate real-time daily streak directly from all completed test logs across all dates
+    const calculatedStreak = calculateStreakFromLogs(merged);
+    const existingStreak = this._getLocal(`streak_${userId}`, createFreshStreak(userId));
+    const effectiveStreak = {
+      ...existingStreak,
+      user_id: userId,
+      current_streak: calculatedStreak.current_streak,
+      longest_streak: Math.max(existingStreak.longest_streak || 0, calculatedStreak.longest_streak),
+      last_active_date: calculatedStreak.last_active_date
+    };
+    this._setLocal(`streak_${userId}`, effectiveStreak);
+
+    // Cache to user's localStorage so offline sessions have all historical records
+    this._setLocal(`test_logs_${userId}`, merged);
+    return merged;
+  }
+
+  // Fetch a single canonical test attempt record by attempt ID
+  async fetchTestAttemptById(attemptId, userId) {
+    if (!attemptId) return null;
+
+    // 1. Check direct attempt cache
+    let attempt = this._getLocal(`attempt_${attemptId}`, null);
+    if (attempt && (attempt.prompt_text || attempt.promptText)) {
+      return attempt;
+    }
+
+    // 2. Check local user logs
+    if (userId) {
+      const localLogs = this._getLocal(`test_logs_${userId}`, []);
+      const found = localLogs.find(l => l.id === attemptId);
+      if (found && (found.prompt_text || found.promptText)) {
+        this._setLocal(`attempt_${attemptId}`, found);
+        return found;
+      }
+      if (found && !attempt) attempt = found;
+    }
+
+    // 3. Check Supabase test_sessions and test_logs if configured
+    if (this.isConfigured()) {
+      try {
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(attemptId);
+        if (isUuid) {
+          const { data: sessionRow } = await this._withTimeout(
+            Promise.resolve(this.supabase.from('test_sessions').select('*').eq('id', attemptId).maybeSingle()),
+            3000
+          ).catch(() => ({ data: null }));
+
+          if (sessionRow) {
+            attempt = { ...(attempt || {}), ...sessionRow };
+          }
+        }
+
+        // If prompt_text is still missing, query user's recent sessions
+        if ((!attempt?.prompt_text && !attempt?.promptText) && userId) {
+          const { data: sessionRows } = await this._withTimeout(
+            Promise.resolve(this.supabase
+              .from('test_sessions')
+              .select('*')
+              .eq('user_id', userId)
+              .order('created_at', { ascending: false })
+              .limit(50)),
+            3000
+          ).catch(() => ({ data: [] }));
+
+          if (Array.isArray(sessionRows)) {
+            const match = sessionRows.find(s =>
+              s.id === attemptId ||
+              (attempt?.created_at && Math.abs(new Date(s.created_at).getTime() - new Date(attempt.created_at).getTime()) < 10000) ||
+              (attempt && s.wpm === attempt.wpm && s.errors === attempt.errors)
+            );
+            if (match) {
+              attempt = {
+                ...attempt,
+                ...match,
+                prompt_text: match.prompt_text,
+                promptText: match.prompt_text,
+                typed_input: match.typed_input,
+                typedInput: match.typed_input,
+                mistake_details: match.mistake_details || attempt?.mistake_details
+              };
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('fetchTestAttemptById test_sessions note:', e);
+      }
+    }
+
+    if (attempt) {
+      this._setLocal(`attempt_${attemptId}`, attempt);
+    }
+    return attempt;
+  }
+
+  // Subscribe to real-time test logs across tabs and Supabase
+  subscribeToUserTestLogs(userId, callback) {
+    if (!userId || !callback) return () => {};
+
+    let channel = null;
+    if (this.isConfigured()) {
+      try {
+        channel = this.supabase
+          .channel(`user-test-logs-${userId}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'test_sessions', filter: `user_id=eq.${userId}` },
+            (payload) => {
+              callback(payload);
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'test_logs', filter: `user_id=eq.${userId}` },
+            (payload) => {
+              callback(payload);
+            }
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('Realtime test_logs subscription note:', err);
+      }
+    }
+
+    const handleLocalSync = (e) => {
+      if (!e.detail?.userId || e.detail?.userId === userId) {
+        callback({ eventType: 'INSERT', new: e.detail });
+      }
+    };
+    window.addEventListener('typemaster-test-logged', handleLocalSync);
+
+    let bc = null;
+    try {
+      bc = new BroadcastChannel('typemaster_history_sync');
+      bc.onmessage = (event) => {
+        if (!event.data?.payload?.userId || event.data?.payload?.userId === userId) {
+          callback({ eventType: 'INSERT', new: event.data?.payload });
+        }
+      };
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      if (channel && this.isConfigured()) {
+        this.supabase.removeChannel(channel);
+      }
+      window.removeEventListener('typemaster-test-logged', handleLocalSync);
+      if (bc) bc.close();
+    };
   }
 
   // ==========================================================

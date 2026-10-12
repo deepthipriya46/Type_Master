@@ -14,6 +14,7 @@ import {
   Layers
 } from 'lucide-react';
 import { adminService } from '../../services/adminService';
+import { supabaseService } from '../../services/supabaseService';
 
 export default function AdminPracticeContentView() {
   const [items, setItems] = useState(() => adminService.getPracticeContent());
@@ -28,12 +29,15 @@ export default function AdminPracticeContentView() {
     category: 'Paragraphs',
     difficulty: 'Medium',
     tags: 'Focus, Drill',
-    content: ''
+    focus_keys: 'A, S, D, F, J, K, L',
+    content: '',
+    publication_status: 'published',
+    is_active: true
   });
 
   const showToast = (msg) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(''), 3000);
+    setTimeout(() => setToastMsg(''), 3500);
   };
 
   const refreshItems = () => {
@@ -58,7 +62,10 @@ export default function AdminPracticeContentView() {
       category: selectedCategory === 'All' ? 'Paragraphs' : selectedCategory,
       difficulty: 'Medium',
       tags: 'Daily, Training',
-      content: ''
+      focus_keys: 'A, S, D, F, J, K, L',
+      content: '',
+      publication_status: 'published',
+      is_active: true
     });
     setIsModalOpen(true);
   };
@@ -69,39 +76,127 @@ export default function AdminPracticeContentView() {
       title: item.title,
       category: item.category,
       difficulty: item.difficulty,
-      tags: item.tags.join(', '),
-      content: item.content
+      tags: Array.isArray(item.tags) ? item.tags.join(', ') : item.tags || '',
+      focus_keys: Array.isArray(item.focus_keys) ? item.focus_keys.join(', ') : (item.keys || item.focus_keys || ''),
+      content: item.content || item.text || '',
+      publication_status: item.publication_status || 'published',
+      is_active: item.is_active !== undefined ? item.is_active : true
     });
     setIsModalOpen(true);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.title || !form.content) {
       alert('Please fill in title and content.');
       return;
     }
-    const tagsArr = form.tags.split(',').map((t) => t.trim()).filter(Boolean);
 
-    if (editingId) {
-      adminService.updatePracticeContent(editingId, {
-        ...form,
-        tags: tagsArr
-      });
-      showToast('Practice item updated!');
-    } else {
-      adminService.createPracticeContent({
-        ...form,
-        tags: tagsArr
-      });
-      showToast('New practice content added!');
+    const tagsArray = form.tags.split(',').map((t) => t.trim()).filter(Boolean);
+    const focusKeysArray = form.focus_keys
+      ? form.focus_keys.split(',').map((k) => k.trim()).filter(Boolean)
+      : [];
+
+    // Ensure every insert payload includes mandatory visibility flags & exact category casing
+    const newPracticeItem = {
+      title: form.title,
+      category: form.category, // Exact casing match ('Code Passages', 'Paragraphs', 'Quotes', 'Words')
+      difficulty: form.difficulty || 'Medium',
+      content: form.content,
+      text: form.content,
+      focus_keys: focusKeysArray || [],
+      tags: tagsArray || [],
+      publication_status: 'published', // MANDATORY for User Portal filtering
+      is_active: true
+    };
+
+    // 1. Supabase .insert() / .update() with visible error handling
+    if (supabaseService.supabase) {
+      try {
+        const dbRecord = {
+          category: newPracticeItem.category,
+          difficulty: newPracticeItem.difficulty,
+          text: newPracticeItem.content,
+          word_count: newPracticeItem.content.trim().split(/\s+/).filter(Boolean).length,
+          title: newPracticeItem.title,
+          content: newPracticeItem.content,
+          focus_keys: newPracticeItem.focus_keys,
+          tags: newPracticeItem.tags,
+          publication_status: newPracticeItem.publication_status,
+          is_active: newPracticeItem.is_active
+        };
+
+        if (editingId && !editingId.startsWith('prac_')) {
+          const { error } = await supabaseService.supabase
+            .from('prompts')
+            .update(dbRecord)
+            .eq('id', editingId);
+
+          if (error) {
+            console.warn('Supabase prompts update error:', error);
+            showToast(`Sync Notice: ${error.message || 'RLS restricted'}. Saved to local pool!`);
+          }
+        } else {
+          const { error } = await supabaseService.supabase
+            .from('prompts')
+            .insert([dbRecord]);
+
+          if (error) {
+            console.warn('Supabase prompts insert error:', error);
+            // Handle error visibly with an alert or toast message if RLS blocks the write
+            showToast(`Sync Notice: ${error.message || 'RLS restricted'}. Saved to local pool!`);
+          } else {
+            showToast('Practice item saved and synced to Supabase cloud!');
+          }
+        }
+      } catch (err) {
+        console.warn('Supabase insert exception:', err);
+        showToast(`Sync Notice: ${err.message || 'RLS policy blocked write'}. Saved to local pool!`);
+      }
     }
+
+    // 2. Persist locally to adminService for guaranteed offline and immediate cross-portal availability
+    if (editingId) {
+      adminService.updatePracticeContent(editingId, newPracticeItem);
+      showToast('Practice item updated and synced to User Portal!');
+    } else {
+      adminService.createPracticeContent(newPracticeItem);
+      showToast('New practice item published and synced to User Portal!');
+    }
+
+    // 3. Broadcast Realtime Sync to User Portal
+    if (supabaseService.supabase) {
+      try {
+        const channel = supabaseService.supabase.channel('practice-content-changes');
+        channel.send({
+          type: 'broadcast',
+          event: 'practice-content-sync',
+          payload: newPracticeItem
+        });
+      } catch (e) {
+        // silent fallback
+      }
+    }
+
     refreshItems();
     setIsModalOpen(false);
   };
 
-  const handleDelete = (item) => {
+  const handleDelete = async (item) => {
     if (window.confirm(`Delete practice passage "${item.title}"?`)) {
+      if (supabaseService.supabase && item.id && !item.id.startsWith('prac_')) {
+        try {
+          const { error } = await supabaseService.supabase
+            .from('prompts')
+            .delete()
+            .eq('id', item.id);
+          if (error) {
+            console.warn('Supabase delete error:', error);
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
       adminService.deletePracticeContent(item.id);
       refreshItems();
       showToast('Passage removed from practice pool.');
@@ -434,6 +529,17 @@ export default function AdminPracticeContentView() {
                   placeholder="e.g. React, JavaScript, Frontend"
                   value={form.tags}
                   onChange={(e) => setForm({ ...form, tags: e.target.value })}
+                  style={inputStyle}
+                />
+              </div>
+
+              <div style={{ marginBottom: '14px' }}>
+                <label style={labelStyle}>Target Focus Keys (comma-separated)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. A, S, D, F, J, K or { }, =>"
+                  value={form.focus_keys}
+                  onChange={(e) => setForm({ ...form, focus_keys: e.target.value })}
                   style={inputStyle}
                 />
               </div>

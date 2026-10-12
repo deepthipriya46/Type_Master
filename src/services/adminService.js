@@ -969,18 +969,32 @@ class AdminService {
 
   createPracticeContent(itemData) {
     const items = this.getPracticeContent();
+    const contentText = itemData.content || itemData.text || '';
     const newItem = {
-      id: `prac_${Date.now()}`,
+      id: itemData.id || `prac_${Date.now()}`,
+      title: itemData.title || 'Untitled Practice Drill',
       category: itemData.category || 'Paragraphs',
-      title: itemData.title,
       difficulty: itemData.difficulty || 'Medium',
-      tags: itemData.tags || ['Practice'],
-      content: itemData.content,
-      wordCount: itemData.content.trim().split(/\s+/).length
+      content: contentText,
+      text: contentText,
+      focus_keys: Array.isArray(itemData.focus_keys) ? itemData.focus_keys : (itemData.focusKeys || []),
+      tags: Array.isArray(itemData.tags) ? itemData.tags : (typeof itemData.tags === 'string' ? itemData.tags.split(',').map(t => t.trim()).filter(Boolean) : ['Practice']),
+      publication_status: itemData.publication_status || 'published', // MANDATORY for User Portal filtering
+      is_active: itemData.is_active !== undefined ? itemData.is_active : true,
+      wordCount: contentText.trim().split(/\s+/).filter(Boolean).length,
+      created_at: itemData.created_at || new Date().toISOString()
     };
     items.unshift(newItem);
     this._set('admin_practice_content', items);
     this.logAudit('Practice Content Added', newItem.title, `Category: ${newItem.category}`);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('practice-content-sync', { detail: { action: 'create', item: newItem, items } }));
+      try {
+        const bc = new BroadcastChannel('typemaster_practice_sync');
+        bc.postMessage({ action: 'create', item: newItem, items });
+        bc.close();
+      } catch (e) {}
+    }
     return newItem;
   }
 
@@ -988,12 +1002,28 @@ class AdminService {
     const items = this.getPracticeContent();
     const index = items.findIndex(i => i.id === id);
     if (index >= 0) {
-      if (updates.content) {
-        updates.wordCount = updates.content.trim().split(/\s+/).length;
-      }
-      items[index] = { ...items[index], ...updates };
+      const contentText = updates.content || updates.text || items[index].content;
+      const updatedItem = {
+        ...items[index],
+        ...updates,
+        content: contentText,
+        text: contentText,
+        wordCount: contentText.trim().split(/\s+/).filter(Boolean).length,
+        publication_status: updates.publication_status || items[index].publication_status || 'published',
+        is_active: updates.is_active !== undefined ? updates.is_active : items[index].is_active,
+        updated_at: new Date().toISOString()
+      };
+      items[index] = updatedItem;
       this._set('admin_practice_content', items);
       this.logAudit('Practice Content Updated', items[index].title, 'Updated passage');
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('practice-content-sync', { detail: { action: 'update', item: updatedItem, items } }));
+        try {
+          const bc = new BroadcastChannel('typemaster_practice_sync');
+          bc.postMessage({ action: 'update', item: updatedItem, items });
+          bc.close();
+        } catch (e) {}
+      }
       return items[index];
     }
     return null;
@@ -1006,6 +1036,14 @@ class AdminService {
       items = items.filter(i => i.id !== id);
       this._set('admin_practice_content', items);
       this.logAudit('Practice Content Removed', item.title, 'Deleted passage');
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('practice-content-sync', { detail: { action: 'delete', id, items } }));
+        try {
+          const bc = new BroadcastChannel('typemaster_practice_sync');
+          bc.postMessage({ action: 'delete', id, items });
+          bc.close();
+        } catch (e) {}
+      }
       return true;
     }
     return false;

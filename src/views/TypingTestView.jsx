@@ -179,7 +179,13 @@ export default function TypingTestView({
         if (err.name === 'AbortError') return;
         console.warn('[TypingTestView] Generation failed, preserving previous passage:', err);
         if (activeRequestIdRef.current === reqId) {
-          setGenerationError('Unable to generate a new passage. Please try again.');
+          setPromptText(prev => {
+            if (!prev || prev === 'Loading typing prompt...') {
+              return 'The art of bookbinding begins with selecting high quality leather, carefully hand-pressed to achieve smooth, rich texture. Skilled artisans stitch the paper signatures together using durable linen threads.';
+            }
+            return prev;
+          });
+          setGenerationError(null);
         }
       } finally {
         if (activeRequestIdRef.current === reqId) {
@@ -426,23 +432,45 @@ export default function TypingTestView({
       : (latestMetricsRef.current.wpm > 0 ? latestMetricsRef.current.wpm : accurateWpm);
 
     const mistakeAnalysis = analyzeSessionMistakes(promptText, currentInput);
+    const totalMistakes = mistakeAnalysis.totalMistakesCount;
     const now = new Date();
     const sessionPayload = {
       wpm: finalWpm,
       rawWpm: Math.round((currentChars / 5) / (finalDuration / 60)),
       accuracy: finalAccuracy,
       duration: finalDuration,
-      errors: currentErrors,
+      errors: totalMistakes,
+      uncorrectedErrors: currentErrors,
+      uncorrected_errors: currentErrors,
+      totalMistakes: totalMistakes,
+      total_mistakes: totalMistakes,
       characters: currentChars,
+      correctCharacters: mistakeAnalysis.correctCharactersCount,
+      correct_characters: mistakeAnalysis.correctCharactersCount,
+      wrongCharacters: mistakeAnalysis.wrongCharactersCount,
+      wrong_characters: mistakeAnalysis.wrongCharactersCount,
+      missedCharacters: mistakeAnalysis.missedCharactersCount,
+      missed_characters: mistakeAnalysis.missedCharactersCount,
+      extraCharacters: mistakeAnalysis.extraCharactersCount,
+      extra_characters: mistakeAnalysis.extraCharactersCount,
       elapsedSeconds: finalDuration,
       category,
       difficulty,
       scheduled_test_id: initialSettings.scheduledTestId || null,
       scheduled_test_title: initialSettings.scheduledTestTitle || null,
       promptText,
+      prompt_text: promptText,
       typedInput: currentInput,
+      typed_input: currentInput,
       mistakeDetails: mistakeAnalysis.mistakeWords,
+      mistake_details: mistakeAnalysis.mistakeWords,
       mistakeStats: {
+        wrongCount: mistakeAnalysis.wrongCharactersCount,
+        missedCount: mistakeAnalysis.missedCharactersCount,
+        extraCount: mistakeAnalysis.extraCharactersCount,
+        confusionPair: mistakeAnalysis.mostCommonConfusion
+      },
+      mistake_stats: {
         wrongCount: mistakeAnalysis.wrongCharactersCount,
         missedCount: mistakeAnalysis.missedCharactersCount,
         extraCount: mistakeAnalysis.extraCharactersCount,

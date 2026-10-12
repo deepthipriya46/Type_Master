@@ -63,14 +63,15 @@ export default function FeedbackView({ user, onNavigate }) {
   const loadFeedback = useCallback(async () => {
     if (!effectiveUserId) return;
     try {
-      const records = await supabaseService.fetchUserFeedbackLive(effectiveUserId);
+      const uEmail = user?.email || supabaseService.getCurrentUser()?.email;
+      const records = await supabaseService.fetchUserFeedbackLive(effectiveUserId, uEmail);
       setFeedbackList(records || []);
     } catch (err) {
       console.warn('Load feedback error:', err);
     } finally {
       setDataLoading(false);
     }
-  }, [effectiveUserId]);
+  }, [effectiveUserId, user?.email]);
 
   useEffect(() => {
     loadFeedback();

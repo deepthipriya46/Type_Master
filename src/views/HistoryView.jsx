@@ -1,42 +1,123 @@
-import React, { useState, useMemo } from 'react';
-import { Clock, Search, Download, Trash2, ArrowUpDown, FileText, CheckCircle2, X } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { Clock, Search, Download, Trash2, ArrowUpDown, FileText, CheckCircle2, X, FileSpreadsheet, RotateCcw } from 'lucide-react';
 import { supabaseService } from '../services/supabaseService';
 import ReviewMistakesView from './ReviewMistakesView';
+import { exportTestHistoryToExcel } from '../utils/excelExport';
 
 export default function HistoryView({ recentTests = [], onHistoryCleared, onNavigate }) {
+  const currentUser = supabaseService.getCurrentUser();
+  const userId = currentUser?.id;
+
+  const [historyList, setHistoryList] = useState(() => {
+    if (Array.isArray(recentTests) && recentTests.length > 0) return recentTests;
+    if (userId) return supabaseService._getLocal(`test_logs_${userId}`, []);
+    return [];
+  });
+  const [dataLoading, setDataLoading] = useState(historyList.length === 0);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDuration, setFilterDuration] = useState('all');
   const [clearing, setClearing] = useState(false);
   const [selectedTestForReview, setSelectedTestForReview] = useState(null);
+  const [toastMessage, setToastMessage] = useState('');
+  const [reloading, setReloading] = useState(false);
 
-  // Defensively deduplicate recent tests so only 1 report is displayed per test session
+  const handleOpenReview = async (test) => {
+    // 1. Immediately open modal with the test record so the UI opens with 0ms latency
+    setSelectedTestForReview(test);
+
+    // 2. If prompt_text is not yet present on this test row, fetch full canonical attempt in background
+    if (!test.prompt_text && !test.promptText) {
+      try {
+        const canonical = await supabaseService.fetchTestAttemptById(test.id, userId);
+        if (canonical) {
+          setSelectedTestForReview(canonical);
+        }
+      } catch (err) {
+        console.warn('Extra telemetry load note:', err);
+      }
+    }
+  };
+
+  const handleReloadHistory = async () => {
+    setReloading(true);
+    try {
+      await loadHistory();
+      setToastMessage('Test history reloaded successfully!');
+      setTimeout(() => setToastMessage(''), 3000);
+    } catch (err) {
+      console.warn('Reload history error:', err);
+    } finally {
+      setReloading(false);
+    }
+  };
+
+  // Sync when recentTests prop updates from parent
+  useEffect(() => {
+    if (Array.isArray(recentTests) && recentTests.length > 0) {
+      setHistoryList(recentTests);
+      setDataLoading(false);
+    }
+  }, [recentTests]);
+
+  // Fetch live test logs from Supabase & localStorage on mount and across sessions
+  const loadHistory = useCallback(async () => {
+    if (!userId) {
+      setDataLoading(false);
+      return;
+    }
+    try {
+      const logs = await supabaseService.fetchUserTestLogs(userId);
+      if (Array.isArray(logs) && logs.length > 0) {
+        setHistoryList(logs);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch user test history:', err);
+    } finally {
+      setDataLoading(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    loadHistory();
+
+    // Subscribe to live test submissions across tabs and portals
+    const unsubscribe = supabaseService.subscribeToUserTestLogs(userId, () => {
+      loadHistory();
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [userId, loadHistory]);
+
+  // Defensively deduplicate tests so only 1 report is displayed per test session
   const uniqueRecentTests = useMemo(() => {
     const list = [];
-    for (const t of recentTests) {
+    for (const t of historyList) {
       const isDup = list.some(existing => {
         if (existing.id && t.id && existing.id === t.id) return true;
         if (existing.created_at && t.created_at) {
           const diff = Math.abs(new Date(existing.created_at).getTime() - new Date(t.created_at).getTime());
           if (diff < 5000 && existing.wpm === t.wpm && existing.errors === t.errors) return true;
         }
-        return (
-          existing.date === t.date &&
-          existing.duration === t.duration &&
-          existing.wpm === t.wpm &&
-          Math.round(existing.accuracy) === Math.round(t.accuracy) &&
-          existing.errors === t.errors
-        );
+        return false;
       });
       if (!isDup) {
         list.push(t);
       }
     }
     return list;
-  }, [recentTests]);
+  }, [historyList]);
 
   const filtered = uniqueRecentTests.filter((t) => {
-    const matchesSearch = (t.result || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          (t.date || '').toLowerCase().includes(searchTerm.toLowerCase());
+    const q = searchTerm.trim().toLowerCase();
+    const matchesSearch = !q ||
+      (t.result || '').toLowerCase().includes(q) ||
+      (t.date || '').toLowerCase().includes(q) ||
+      String(t.wpm || '').includes(q) ||
+      (t.category || '').toLowerCase().includes(q) ||
+      (t.difficulty || '').toLowerCase().includes(q);
     const matchesDuration = filterDuration === 'all' || (t.duration || '').includes(filterDuration);
     return matchesSearch && matchesDuration;
   });
@@ -46,6 +127,7 @@ export default function HistoryView({ recentTests = [], onHistoryCleared, onNavi
       setClearing(true);
       try {
         await supabaseService.clearTestHistory();
+        setHistoryList([]);
         if (onHistoryCleared) {
           onHistoryCleared();
         }
@@ -53,6 +135,13 @@ export default function HistoryView({ recentTests = [], onHistoryCleared, onNavi
         setClearing(false);
       }
     }
+  };
+
+  const handleExportExcel = () => {
+    if (filtered.length === 0) return;
+    exportTestHistoryToExcel(filtered, 'TypeMaster_Test_History.xlsx');
+    setToastMessage(`Exported ${filtered.length} test records to Excel (.xlsx)!`);
+    setTimeout(() => setToastMessage(''), 3500);
   };
 
   const exportCSV = () => {
@@ -69,16 +158,68 @@ export default function HistoryView({ recentTests = [], onHistoryCleared, onNavi
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+    setToastMessage(`Exported ${filtered.length} records to CSV!`);
+    setTimeout(() => setToastMessage(''), 3500);
   };
 
   return (
-    <div className="page-container">
+    <div className="page-container" style={{ position: 'relative' }}>
+      {/* Toast Feedback Notification */}
+      {toastMessage && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '24px',
+            right: '24px',
+            background: '#0F172A',
+            color: '#FFFFFF',
+            padding: '12px 20px',
+            borderRadius: '12px',
+            boxShadow: '0 10px 25px -5px rgba(0,0,0,0.3)',
+            zIndex: 99999,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            fontSize: '0.86rem',
+            fontWeight: 600,
+            animation: 'fadeIn 0.2s ease-in-out'
+          }}
+        >
+          <CheckCircle2 size={18} color="#10B981" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       <div className="greeting-header">
         <div className="greeting-text">
           <h1>Test History Log</h1>
           <p>Chronological record of every completed typing test session.</p>
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={handleReloadHistory}
+            disabled={reloading || dataLoading}
+            style={{
+              background: '#FFFFFF',
+              border: '1px solid #CBD5E1',
+              borderRadius: '10px',
+              padding: '8px 14px',
+              fontSize: '0.84rem',
+              fontWeight: 700,
+              color: '#334155',
+              cursor: (reloading || dataLoading) ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+              transition: 'background 0.15s'
+            }}
+            title="Reload complete test history from database"
+          >
+            <RotateCcw size={15} style={{ transform: (reloading || dataLoading) ? 'rotate(180deg)' : 'none', transition: 'transform 0.4s ease' }} />
+            <span>{reloading ? 'Reloading...' : 'Reload History'}</span>
+          </button>
           {uniqueRecentTests.length > 0 && (
             <>
               <button
@@ -100,13 +241,38 @@ export default function HistoryView({ recentTests = [], onHistoryCleared, onNavi
               >
                 <Trash2 size={15} /> Clear Log
               </button>
+              {/* Primary Excel (.xlsx) Download Button */}
+              <button
+                onClick={handleExportExcel}
+                style={{
+                  background: '#10B981',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '10px',
+                  padding: '8px 16px',
+                  fontSize: '0.84rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  boxShadow: '0 2px 8px rgba(16, 185, 129, 0.25)',
+                  transition: 'background 0.15s'
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#059669')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#10B981')}
+                title="Download complete test history in Excel (.xlsx) spreadsheet format"
+              >
+                <FileSpreadsheet size={16} /> Export Excel (.xlsx)
+              </button>
+              {/* Optional CSV Download Button */}
               <button
                 onClick={exportCSV}
                 style={{
                   background: '#ffffff',
                   border: '1px solid #cbd5e1',
                   borderRadius: '10px',
-                  padding: '8px 16px',
+                  padding: '8px 14px',
                   fontSize: '0.84rem',
                   fontWeight: 700,
                   color: '#334155',
@@ -115,6 +281,7 @@ export default function HistoryView({ recentTests = [], onHistoryCleared, onNavi
                   alignItems: 'center',
                   gap: '6px'
                 }}
+                title="Download test history as CSV"
               >
                 <Download size={15} /> Export CSV
               </button>
@@ -248,7 +415,7 @@ export default function HistoryView({ recentTests = [], onHistoryCleared, onNavi
                   <td style={{ textAlign: 'center' }}>
                     <button
                       type="button"
-                      onClick={() => setSelectedTestForReview(test)}
+                      onClick={() => handleOpenReview(test)}
                       style={{
                         background: '#EEF2FF',
                         color: '#4F46E5',
@@ -341,8 +508,10 @@ export default function HistoryView({ recentTests = [], onHistoryCleared, onNavi
               <ReviewMistakesView
                 sessionData={{
                   ...selectedTestForReview,
-                  promptText: selectedTestForReview.prompt_text || selectedTestForReview.promptText || 'The quick brown fox jumps over the lazy dog.',
+                  promptText: selectedTestForReview.prompt_text || selectedTestForReview.promptText || '',
+                  prompt_text: selectedTestForReview.prompt_text || selectedTestForReview.promptText || '',
                   typedInput: selectedTestForReview.typed_input || selectedTestForReview.typedInput || '',
+                  typed_input: selectedTestForReview.typed_input || selectedTestForReview.typedInput || '',
                   timestamp: selectedTestForReview.created_at || selectedTestForReview.date,
                   formattedDate: selectedTestForReview.date
                 }}

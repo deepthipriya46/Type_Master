@@ -40,7 +40,7 @@ const isRecoveryUrlFlow = () => {
 };
 
 export default function App() {
-  const authContext = useAuth ? useAuth() : null;
+  const authContext = useAuth();
   const authContextUser = authContext?.user;
   const authContextLogout = authContext?.logout;
   const refreshProfile = authContext?.refreshProfile;
@@ -223,13 +223,33 @@ export default function App() {
       return;
     }
 
-    // 3. If authenticated and visiting root '/', redirect to role-appropriate portal
+    // 3. If authenticated and visiting a specific route on mount, synchronize currentView
+    const userViewMap = {
+      'dashboard': 'dashboard',
+      'practice': 'practice',
+      'performance': 'performance',
+      'my-performance': 'performance',
+      'test-history': 'history',
+      'history': 'history',
+      'typing-test': 'typing-test',
+      'scheduled-tests': 'scheduled-tests',
+      'challenges': 'scheduled-tests',
+      'leaderboard': 'leaderboard',
+      'progress': 'progress',
+      'feedback': 'feedback',
+      'settings': 'settings',
+      'help': 'help',
+      'help-support': 'help'
+    };
+
     if (path === '' || path === '/') {
       if (portal === 'admin' && isAdmin) {
         window.history.replaceState(null, '', '/admin');
       } else {
         window.history.replaceState(null, '', '/dashboard');
       }
+    } else if (userViewMap[path] && portal === 'user') {
+      setCurrentView(userViewMap[path]);
     }
   }, [isAuthenticated, portal, authUser, effectiveUser]);
 
@@ -263,14 +283,18 @@ export default function App() {
           'dashboard': 'dashboard',
           'practice': 'practice',
           'performance': 'performance',
+          'my-performance': 'performance',
           'test-history': 'history',
           'history': 'history',
           'typing-test': 'typing-test',
+          'scheduled-tests': 'scheduled-tests',
+          'challenges': 'scheduled-tests',
           'leaderboard': 'leaderboard',
           'progress': 'progress',
           'feedback': 'feedback',
           'settings': 'settings',
-          'help': 'help'
+          'help': 'help',
+          'help-support': 'help'
         };
         setCurrentView(viewMap[path] || 'dashboard');
       }
@@ -709,7 +733,14 @@ export default function App() {
       <TestDetailModal
         test={selectedTestDetail}
         onClose={() => setSelectedTestDetail(null)}
-        onReviewMistakes={(test) => setReviewMistakesSession(test)}
+        onReviewMistakes={async (test) => {
+          try {
+            const canonical = await supabaseService.fetchTestAttemptById(test.id, currentUser?.id);
+            setReviewMistakesSession(canonical || test);
+          } catch {
+            setReviewMistakesSession(test);
+          }
+        }}
       />
 
       {/* Review Past Test Mistakes Modal from Dashboard / History */}
@@ -776,8 +807,10 @@ export default function App() {
               <ReviewMistakesView
                 sessionData={{
                   ...reviewMistakesSession,
-                  promptText: reviewMistakesSession.prompt_text || reviewMistakesSession.promptText || 'The quick brown fox jumps over the lazy dog.',
+                  promptText: reviewMistakesSession.prompt_text || reviewMistakesSession.promptText || '',
+                  prompt_text: reviewMistakesSession.prompt_text || reviewMistakesSession.promptText || '',
                   typedInput: reviewMistakesSession.typed_input || reviewMistakesSession.typedInput || '',
+                  typed_input: reviewMistakesSession.typed_input || reviewMistakesSession.typedInput || '',
                   timestamp: reviewMistakesSession.created_at || reviewMistakesSession.date,
                   formattedDate: reviewMistakesSession.date
                 }}

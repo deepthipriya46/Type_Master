@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { supabaseService } from './supabaseService';
+import { supabaseService } from './supabaseService.js';
 
 // Dedicated helper to trigger authentic, uncorrupted Excel (.xlsx) and CSV downloads
 export function triggerFileDownload(blob, filename) {
@@ -281,12 +281,12 @@ class AdminService {
       try {
         // Try profiles table first, fallback to users table
         let res = await supabaseService._withTimeout(
-          supabaseService.supabase.from('profiles').select('*').order('created_at', { ascending: false }),
+          Promise.resolve(supabaseService.supabase.from('profiles').select('*').order('created_at', { ascending: false })),
           4000
         );
-        if (res.error || !res.data) {
+        if (res.error || !res.data || res.data.length === 0) {
           res = await supabaseService._withTimeout(
-            supabaseService.supabase.from('users').select('*').order('created_at', { ascending: false }),
+            Promise.resolve(supabaseService.supabase.from('users').select('*').order('created_at', { ascending: false })),
             4000
           );
         }
@@ -312,11 +312,19 @@ class AdminService {
       }
     }
 
-    // 2. Query Local Store Registry (Real registered accounts only, NO fake Priya/Rahul)
-    const registered = this._get('typemaster_users_registry', []);
+    // 2. Query Local Store Registry (Real registered accounts only, unify users_registry & typemaster_users_registry)
+    const reg1 = this._get('users_registry', []);
+    const reg2 = this._get('typemaster_users_registry', []);
+    const mergedMap = new Map();
+    [...reg1, ...reg2].forEach(r => {
+      if (r && r.id && !String(r.id).startsWith('guest_') && !mergedMap.has(String(r.id))) {
+        mergedMap.set(String(r.id), r);
+      }
+    });
+    const registered = Array.from(mergedMap.values());
     return registered.map(r => ({
       id: r.id,
-      name: r.username || 'Typist',
+      name: r.displayName || r.display_name || r.username || 'Typist',
       email: r.email || `${r.username || 'user'}@typemaster.local`,
       role: r.role || (r.email === 'admin@typemaster.com' ? 'admin' : 'user'),
       status: r.status || 'Active',
@@ -336,12 +344,12 @@ class AdminService {
     if (supabaseService.isConfigured()) {
       try {
         let res = await supabaseService._withTimeout(
-          supabaseService.supabase.from('test_sessions').select('*').order('created_at', { ascending: false }),
+          Promise.resolve(supabaseService.supabase.from('test_sessions').select('*').order('created_at', { ascending: false })),
           4000
         );
-        if (res.error || !res.data) {
+        if (res.error || !res.data || res.data.length === 0) {
           res = await supabaseService._withTimeout(
-            supabaseService.supabase.from('test_logs').select('*').order('created_at', { ascending: false }),
+            Promise.resolve(supabaseService.supabase.from('test_logs').select('*').order('created_at', { ascending: false })),
             4000
           );
         }
@@ -354,11 +362,13 @@ class AdminService {
     }
 
     // 2. Gather from local storage across registered users
-    const users = this._get('typemaster_users_registry', []);
+    const reg1 = this._get('users_registry', []);
+    const reg2 = this._get('typemaster_users_registry', []);
+    const userIds = new Set([...reg1, ...reg2].map(u => u?.id).filter(Boolean));
     let allLogs = [];
-    users.forEach(u => {
-      const uLogs = this._get(`test_logs_${u.id}`, []);
-      allLogs = allLogs.concat(uLogs.map(l => ({ ...l, userName: u.username })));
+    userIds.forEach(uid => {
+      const uLogs = this._get(`test_logs_${uid}`, []);
+      allLogs = allLogs.concat(uLogs);
     });
     return allLogs;
   }
@@ -377,10 +387,33 @@ class AdminService {
       : allTestLogs;
 
     const totalUsers = isFiltered ? users.length : allUsers.length;
-    // Active users: users with tests completed or active within the timeframe
-    const activeUsers = isFiltered
-      ? Math.max(testLogs.map(l => l.user_id).filter(Boolean).length, users.filter(u => u.testsTaken > 0).length)
-      : Math.max(1, allUsers.filter(u => u.testsTaken > 0 || u.status === 'Active').length);
+
+    // Strategy A: Strict Registered User Activity
+    // Filter strictly for registered user IDs present in the users/profiles table within the 30-day window
+    // (JOIN users u ON u.id = tl.user_id WHERE tl.created_at >= NOW() - INTERVAL '30 days')
+    const registeredUserIds = new Set(
+      allUsers
+        .map(u => String(u.id))
+        .filter(id => id && !id.startsWith('guest_'))
+    );
+
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const activeRegisteredLogs = allTestLogs.filter(l => {
+      if (!l || !l.user_id) return false;
+      const uid = String(l.user_id);
+      if (uid.startsWith('guest_') || !registeredUserIds.has(uid)) return false;
+      const logDate = new Date(l.created_at || l.date || 0);
+      if (isNaN(logDate.getTime())) return false;
+      if (isFiltered) {
+        return isDateInPeriod(l.created_at || l.date, timeframe);
+      }
+      return logDate >= thirtyDaysAgo;
+    });
+
+    const distinctActiveUserIds = new Set(activeRegisteredLogs.map(l => String(l.user_id)));
+    // Mathematically guaranteed: activeUsers <= totalUsers
+    const activeUsers = Math.min(totalUsers, distinctActiveUserIds.size);
     const testsCompleted = testLogs.length;
 
     // Platform Avg WPM
@@ -475,10 +508,38 @@ class AdminService {
       { name: 'Custom Test', percent: Math.round((catCounts['Custom Test'] / totalCatCount) * 100) || 5, color: '#EC4899' }
     ];
 
-    // Activity Days
-    const activityDays = ['Oct 3', 'Oct 4', 'Oct 5', 'Oct 6', 'Oct 7', 'Oct 8', 'Oct 9'];
-    const activeUsersPoints = [1, 2, 2, 3, 3, 4, activeUsers];
-    const newUsersPoints = [1, 1, 2, 2, 3, 3, totalUsers];
+    // Dynamic 7-day activity metrics strictly from real test logs & user records
+    const dayLabels = [];
+    const now = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      dayLabels.push({
+        label: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        isoDate: d.toISOString().split('T')[0]
+      });
+    }
+
+    const activityDays = dayLabels.map(dl => dl.label);
+    const activeUsersPoints = dayLabels.map(dl => {
+      const dayLogs = allTestLogs.filter(l => {
+        if (!l || !l.user_id) return false;
+        const uid = String(l.user_id);
+        if (uid.startsWith('guest_') || !registeredUserIds.has(uid)) return false;
+        const dStr = (l.created_at || l.date || '').substring(0, 10);
+        return dStr === dl.isoDate;
+      });
+      const dayActive = new Set(dayLogs.map(l => String(l.user_id))).size;
+      return Math.min(totalUsers, dayActive);
+    });
+
+    const newUsersPoints = dayLabels.map(dl => {
+      const usersUpToDay = allUsers.filter(u => {
+        const dStr = (u.joinedOn || u.created_at || '').substring(0, 10);
+        return dStr && dStr <= dl.isoDate;
+      });
+      return Math.min(totalUsers, Math.max(1, usersUpToDay.length));
+    });
 
     return {
       totalUsers,
@@ -500,10 +561,18 @@ class AdminService {
 
   // Synchronous users list (used by table views)
   getUsers() {
-    const registered = this._get('typemaster_users_registry', []);
+    const reg1 = this._get('users_registry', []);
+    const reg2 = this._get('typemaster_users_registry', []);
+    const mergedMap = new Map();
+    [...reg1, ...reg2].forEach(r => {
+      if (r && r.id && !String(r.id).startsWith('guest_') && !mergedMap.has(String(r.id))) {
+        mergedMap.set(String(r.id), r);
+      }
+    });
+    const registered = Array.from(mergedMap.values());
     return registered.map(r => ({
       id: r.id,
-      name: r.username || 'Typist',
+      name: r.displayName || r.display_name || r.username || 'Typist',
       email: r.email || `${r.username || 'user'}@typemaster.local`,
       role: r.role || (r.email === 'admin@typemaster.com' ? 'admin' : 'user'),
       status: r.status || 'Active',
@@ -1267,10 +1336,28 @@ class AdminService {
       : allTestLogs;
 
     const totalTestsConducted = testLogs.length;
-    const activeUsersCount = isFiltered
-      ? Math.max(testLogs.map(l => l.user_id).filter(Boolean).length, users.filter(u => u.testsTaken > 0).length)
-      : users.filter(u => u.testsTaken > 0 || u.status === 'Active').length;
     const totalUsers = isFiltered ? users.length : allUsers.length;
+
+    // Strategy A: Strict Registered User Activity (join with users, exclude guest_* temporary IDs)
+    const registeredUserIds = new Set(
+      allUsers
+        .map(u => String(u.id))
+        .filter(id => id && !id.startsWith('guest_'))
+    );
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const activeLogsInPeriod = (isFiltered ? testLogs : allTestLogs).filter(l => {
+      if (!l || !l.user_id) return false;
+      const uid = String(l.user_id);
+      if (uid.startsWith('guest_') || !registeredUserIds.has(uid)) return false;
+      if (!isFiltered) {
+        const logDate = new Date(l.created_at || l.date || 0);
+        return !isNaN(logDate.getTime()) && logDate >= thirtyDaysAgo;
+      }
+      return true;
+    });
+
+    const activeUsersCount = Math.min(totalUsers, new Set(activeLogsInPeriod.map(l => String(l.user_id))).size);
 
     // Platform Avg WPM strictly from real test logs
     const validWpms = testLogs.map(l => Number(l.wpm) || 0).filter(w => w > 0);
@@ -1330,11 +1417,17 @@ class AdminService {
 
     const userActivityData = dayLabels.map(({ day, isoDate }) => {
       const newUsers = users.filter(u => u.joinedOn && u.joinedOn.startsWith(isoDate)).length;
-      const activeUsers = testLogs.filter(l => l.created_at && l.created_at.startsWith(isoDate)).length;
+      const dayLogs = allTestLogs.filter(l => {
+        if (!l || !l.user_id) return false;
+        const uid = String(l.user_id);
+        if (uid.startsWith('guest_') || !registeredUserIds.has(uid)) return false;
+        return (l.created_at || l.date || '').startsWith(isoDate);
+      });
+      const dayActiveUsers = new Set(dayLogs.map(l => String(l.user_id))).size;
       return {
         day,
         newUsers,
-        activeUsers: Math.max(activeUsers, newUsers)
+        activeUsers: Math.min(totalUsers, Math.max(dayActiveUsers, newUsers))
       };
     });
 

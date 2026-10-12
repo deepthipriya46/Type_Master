@@ -2567,8 +2567,32 @@ class SupabaseService {
             accuracy: l.accuracy
           }));
 
+          // Dynamically synchronize aggregate stats (Total Tests, Average WPM, Accuracy, Best WPM)
+          // directly from test logs so both User Portal and Admin Portal are 100% synchronized
+          const validLogs = mergedRecent.filter(l => l && (l.is_valid !== false));
+          const totalTestsDynamic = validLogs.length;
+          const validWpms = validLogs.map(l => Number(l.wpm) || 0).filter(w => w > 0);
+          const bestWpmDynamic = validWpms.length > 0
+            ? Math.max(...validWpms, Number(effectiveUser?.best_wpm) || 0)
+            : (Number(effectiveUser?.best_wpm) || 0);
+          const avgWpmDynamic = validWpms.length > 0
+            ? Math.round(validWpms.reduce((a, b) => a + b, 0) / validWpms.length)
+            : (Number(effectiveUser?.avg_wpm) || 0);
+          const validAccs = validLogs.map(l => Number(l.accuracy) || 0).filter(a => a > 0);
+          const accuracyDynamic = validAccs.length > 0
+            ? Math.round((validAccs.reduce((a, b) => a + b, 0) / validAccs.length) * 10) / 10
+            : (Number(effectiveUser?.accuracy) || 0);
+
+          const syncedUser = {
+            ...effectiveUser,
+            tests_completed: Math.max(totalTestsDynamic, Number(effectiveUser?.tests_completed) || 0),
+            best_wpm: bestWpmDynamic,
+            avg_wpm: avgWpmDynamic,
+            accuracy: accuracyDynamic
+          };
+
           return {
-            user: effectiveUser,
+            user: syncedUser,
             streak: effectiveStreak,
             recentTests: mergedRecent,
             achievements: this._getLocal(`achievements_${userId}`, DEFAULT_ACHIEVEMENTS),
@@ -2595,6 +2619,27 @@ class SupabaseService {
     this._setLocal(`streak_${userId}`, streak);
     const achievements = this._getLocal(`achievements_${userId}`, DEFAULT_ACHIEVEMENTS);
 
+    const validLogs = recentTests.filter(l => l && (l.is_valid !== false));
+    const validWpms = validLogs.map(l => Number(l.wpm) || 0).filter(w => w > 0);
+    const bestWpmDynamic = validWpms.length > 0
+      ? Math.max(...validWpms, Number(user?.best_wpm) || 0)
+      : (Number(user?.best_wpm) || 0);
+    const avgWpmDynamic = validWpms.length > 0
+      ? Math.round(validWpms.reduce((a, b) => a + b, 0) / validWpms.length)
+      : (Number(user?.avg_wpm) || 0);
+    const validAccs = validLogs.map(l => Number(l.accuracy) || 0).filter(a => a > 0);
+    const accuracyDynamic = validAccs.length > 0
+      ? Math.round((validAccs.reduce((a, b) => a + b, 0) / validAccs.length) * 10) / 10
+      : (Number(user?.accuracy) || 0);
+
+    const syncedUser = {
+      ...user,
+      tests_completed: Math.max(validLogs.length, Number(user?.tests_completed) || 0),
+      best_wpm: bestWpmDynamic,
+      avg_wpm: avgWpmDynamic,
+      accuracy: accuracyDynamic
+    };
+
     // Build real-time graph points strictly from completed tests
     const chronological = [...recentTests].reverse().slice(-7);
     const performanceGraph = chronological.map(l => ({
@@ -2608,7 +2653,7 @@ class SupabaseService {
     }));
 
     return {
-      user,
+      user: syncedUser,
       streak,
       recentTests,
       achievements,

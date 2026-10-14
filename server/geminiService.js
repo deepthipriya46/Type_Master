@@ -27,19 +27,51 @@ export const ALLOWED_DIFFICULTIES = ['Easy', 'Medium', 'Hard'];
 export const ALLOWED_LANGUAGES = ['C', 'Python', 'Java', 'JavaScript', 'C++'];
 
 // Supported Gemini models with automatic failover if any model hits quota/429
-const CANDIDATE_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.5-pro',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-  'gemini-1.5-pro',
+export const CANDIDATE_MODELS = [
   process.env.GEMINI_MODEL || 'gemini-3.5-flash',
-  'gemini-3.6-flash',
+  'gemini-3.5-flash',
   'gemini-3-flash-preview',
-  'gemini-3.1-flash-lite',
+  'gemini-3.8-flash',
+  'gemini-3.6-flash',
   'gemini-3.7-flash',
-  'gemini-3.8-flash'
+  'gemini-3.1-flash-lite',
+  'gemini-flash-latest'
 ];
+
+// Active runtime configuration (Single source of truth for key and model)
+let activeGeminiConfig = {
+  apiKey: (process.env.GEMINI_API_KEY || '').trim(),
+  model: (process.env.GEMINI_MODEL || 'gemini-3.5-flash').trim()
+};
+
+export function getActiveGeminiConfig() {
+  return {
+    isConfigured: Boolean(activeGeminiConfig.apiKey && activeGeminiConfig.apiKey.length > 8),
+    model: activeGeminiConfig.model || 'gemini-3.5-flash',
+    maskedKey: activeGeminiConfig.apiKey
+      ? `••••••••••••${activeGeminiConfig.apiKey.slice(-4)}`
+      : ''
+  };
+}
+
+export function getInternalGeminiConfig() {
+  return {
+    apiKey: activeGeminiConfig.apiKey || (process.env.GEMINI_API_KEY || '').trim(),
+    model: activeGeminiConfig.model || (process.env.GEMINI_MODEL || 'gemini-3.5-flash').trim()
+  };
+}
+
+export function updateActiveGeminiConfig({ apiKey, model }) {
+  if (apiKey !== undefined) {
+    activeGeminiConfig.apiKey = (apiKey || '').trim();
+    process.env.GEMINI_API_KEY = activeGeminiConfig.apiKey;
+  }
+  if (model) {
+    activeGeminiConfig.model = model.trim();
+    process.env.GEMINI_MODEL = activeGeminiConfig.model;
+  }
+  return getActiveGeminiConfig();
+}
 
 // Rich Diverse Subtopic Pool for Maximum Variety Across Requests
 const SUBTOPIC_POOLS = {
@@ -828,11 +860,9 @@ export async function generateTextWithGemini({
   apiKey: clientApiKey = '',
   model: clientModel = ''
 }) {
-  // Key Priority Order:
-  // 1. Admin Configured Key from Supabase / system_config / client payload
-  // 2. Server Environment Variable (GEMINI_API_KEY)
-  // 3. Local Text Repository Fallback
-  const apiKey = (clientApiKey || '').trim() || process.env.GEMINI_API_KEY || '';
+  const internalConfig = getInternalGeminiConfig();
+  const apiKey = (clientApiKey || '').trim() || internalConfig.apiKey || '';
+  const preferredModel = (clientModel || '').trim() || internalConfig.model || 'gemini-3.5-flash';
 
   if (!apiKey) {
     console.warn('[GeminiService] No Gemini API key provided. Serving rotating verified fallback.');
@@ -866,10 +896,11 @@ export async function generateTextWithGemini({
     }
   };
 
-  // Determine models to try, placing chosen model first if provided
-  const activeCandidateModels = clientModel
-    ? [clientModel, ...CANDIDATE_MODELS.filter(m => m !== clientModel)]
-    : CANDIDATE_MODELS;
+  // Determine models to try, placing chosen model first
+  const activeCandidateModels = [
+    preferredModel,
+    ...CANDIDATE_MODELS.filter((m) => m !== preferredModel)
+  ];
 
   // Try candidate models in order of availability
   for (const model of activeCandidateModels) {
@@ -882,7 +913,7 @@ export async function generateTextWithGemini({
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(6000) // Fast 6s timeout per model
+        signal: AbortSignal.timeout(12000) // 12s timeout per model
       });
 
       if (response.ok) {
@@ -917,7 +948,6 @@ export async function generateTextWithGemini({
         }
       } else {
         const errJson = await response.json().catch(() => ({}));
-        // If 429 quota reached on this model, continue to next model
         console.warn(`[GeminiService] Model ${model} responded with ${response.status}: ${errJson.error?.message?.slice(0, 80) || ''}. Trying next candidate model.`);
       }
     } catch (err) {
@@ -935,5 +965,155 @@ export async function generateTextWithGemini({
     language: category === 'Programming' ? language : undefined,
     text: fallbackText,
     source: 'fallback_bank'
+  };
+}
+
+// ==========================================================
+// REAL-TIME AI CHATBOT WITH GEMINI
+// Context-Aware, Rate-Limited, Role & Portal Governed
+// ==========================================================
+export async function chatWithGemini({
+  messages = [],
+  userRole = 'user',
+  portal = 'user',
+  userProfile = null,
+  clientIp = 'localhost'
+}) {
+  if (!checkRateLimit(`chat_${clientIp}`)) {
+    return {
+      success: false,
+      error: 'Rate limit reached. Please wait a moment before sending another message.'
+    };
+  }
+
+  const { apiKey, model: activeModel } = getInternalGeminiConfig();
+
+  if (!apiKey) {
+    return {
+      success: false,
+      error: 'TypeMaster AI Assistant is not configured yet. Please configure the Gemini API Key in Admin Settings.'
+    };
+  }
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return {
+      success: false,
+      error: 'No messages provided.'
+    };
+  }
+
+  const userGreeting = userProfile?.displayName || userProfile?.username || (userRole === 'admin' ? 'Administrator' : 'Typist');
+  const systemPrompt = `You are "TypeMaster AI Assistant", a smart, friendly, and expert typing coach and platform guide built into the TypeMaster application.
+
+Platform & Domain Knowledge:
+- Core Purpose: Helping users test, practice, and build muscle memory for professional typing speed, accuracy, and ergonomic endurance.
+- Key Metrics:
+  * WPM (Words Per Minute): Standard formula is (Total characters typed / 5) / (Time in minutes).
+  * Net WPM: Gross WPM minus (Uncorrected errors / Time in minutes).
+  * Accuracy %: ((Total keystrokes - Errors) / Total keystrokes) * 100.
+  * Consistency: Smoothness and uniformity of keystroke timing intervals.
+- Typing Technique & Ergonomics:
+  * Home row posture: Left hand (A-S-D-F), Right hand (J-K-L-;), thumbs resting on the Spacebar.
+  * Eyes on the screen, not looking down at keyboard keycaps.
+  * Prioritize accuracy over raw speed. Velocity naturally emerges once error rates fall below 3%.
+  * Recommended routine: 15-20 minutes of daily deliberate practice with targeted mistake drills.
+- Application Navigation & Features:
+  * User Portal: Dashboard, Typing Test (1m, 3m, 5m, Custom), Scheduled Tests & Challenges, My Performance, Leaderboard, Progress Trends, Practice Modes (Drills), Test History, Feedback, Settings, Help & Support.
+  * New Text Feature: Powered by Google Gemini to dynamically generate unique typing passages across Technology, Quotes, Literature, Programming (C, Python, Java, JS, C++), Science & Nature, and Random Text.
+  * Scheduled Tests: Official competitive or classroom assessments with anti-cheat detection (tab-switch tracking and copy-paste blocking).
+  * Sound Synthesizer: Cherry Blue clicky, mechanical, typewriter, and silent typing audio feedback.
+  * Mistake Review: Highlights missed words and generates targeted practice drills.
+  * Admin Portal (Authorized Admins only): User management, scheduled tests configuration, audit logs, announcements, and Gemini AI credentials configuration.
+
+Security & Permissions:
+- Current user: ${userGreeting} | Role: ${userRole} | Portal: ${portal}
+- Strictly respect user privacy. Never invent, hallucinate, or expose private performance logs or account details of other users.
+- Do NOT provide unauthorized administrator access or reveal administrator-only reports, private feedback, or raw database credentials to standard users.
+- Provide clear, direct, polite, and encouraging responses with helpful markdown formatting (bullet points, bold highlights) when appropriate. Keep answers focused and concise.`;
+
+  // Format multi-turn conversation history for Gemini API
+  const formattedContents = [];
+  const recentMessages = messages.slice(-12);
+
+  for (const m of recentMessages) {
+    const role = m.role === 'assistant' || m.role === 'model' ? 'model' : 'user';
+    const text = (m.content || m.text || '').trim();
+    if (!text) continue;
+
+    if (formattedContents.length > 0 && formattedContents[formattedContents.length - 1].role === role) {
+      formattedContents[formattedContents.length - 1].parts[0].text += `\n\n${text}`;
+    } else {
+      formattedContents.push({
+        role,
+        parts: [{ text }]
+      });
+    }
+  }
+
+  // Ensure conversation starts with user turn
+  if (formattedContents.length > 0 && formattedContents[0].role !== 'user') {
+    formattedContents.shift();
+  }
+
+  if (formattedContents.length === 0) {
+    return {
+      success: false,
+      error: 'Please enter a valid message.'
+    };
+  }
+
+  const requestBody = {
+    systemInstruction: {
+      parts: [{ text: systemPrompt }]
+    },
+    contents: formattedContents,
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 800
+    }
+  };
+
+  const modelsToTry = [
+    activeModel || 'gemini-3.5-flash',
+    ...CANDIDATE_MODELS.filter((m) => m !== activeModel)
+  ];
+
+  let lastErrorMessage = '';
+
+  for (const model of modelsToTry) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(12000)
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (replyText.trim()) {
+          return {
+            success: true,
+            reply: replyText.trim(),
+            modelUsed: model
+          };
+        }
+      } else {
+        const errJson = await response.json().catch(() => ({}));
+        lastErrorMessage = errJson.error?.message || `HTTP ${response.status}`;
+        console.warn(`[GeminiChat] Model ${model} returned ${response.status}: ${lastErrorMessage}`);
+      }
+    } catch (err) {
+      lastErrorMessage = err.message || 'Request timed out';
+      console.warn(`[GeminiChat] Model ${model} request error: ${lastErrorMessage}`);
+    }
+  }
+
+  return {
+    success: false,
+    error: lastErrorMessage || 'Unable to contact TypeMaster AI. Please try again.'
   };
 }

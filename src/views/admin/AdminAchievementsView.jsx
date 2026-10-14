@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Trophy,
   Award,
@@ -13,15 +13,152 @@ import {
   Filter,
   Medal,
   Users,
-  FileSpreadsheet
+  FileSpreadsheet,
+  RefreshCw
 } from 'lucide-react';
 import { adminService } from '../../services/adminService';
+import { supabase, supabaseService } from '../../services/supabaseService';
 
 export default function AdminAchievementsView() {
   const [activeTab, setActiveTab] = useState('leaderboard'); // 'leaderboard', 'badges'
   const [timeframe, setTimeframe] = useState('All-Time');
   const [badges, setBadges] = useState(() => adminService.getBadges());
-  const rankings = adminService.getLeaderboardRankings(timeframe);
+  const [leaderboardList, setLeaderboardList] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const fetchGlobalLeaderboard = async () => {
+    setLoading(true);
+    try {
+      // Fetch aggregate performance metrics for all registered users
+      let { data: leaderboardData, error } = await supabase
+        .from('users')
+        .select(`
+          id,
+          full_name,
+          email,
+          status,
+          test_logs (
+            wpm,
+            accuracy,
+            created_at
+          )
+        `);
+
+      if (error) {
+        // Fallback if schema has username instead of full_name or status column is omitted
+        const fallbackRes = await supabase
+          .from('users')
+          .select(`
+            id,
+            username,
+            email,
+            status,
+            avatar_url,
+            test_logs (
+              wpm,
+              accuracy,
+              created_at
+            )
+          `);
+        if (!fallbackRes.error && fallbackRes.data) {
+          leaderboardData = fallbackRes.data;
+          error = null;
+        }
+      }
+
+      if (error) {
+        console.error('Error fetching leaderboard:', error);
+        const fallbackList = adminService.getLeaderboardRankings(timeframe);
+        setLeaderboardList(fallbackList || []);
+        return;
+      }
+
+      // Filter logs by timeframe if specified
+      const now = Date.now();
+      const filterLogs = (logs) => {
+        if (!timeframe || timeframe.toLowerCase() === 'all-time' || timeframe.toLowerCase() === 'all') return logs;
+        const days = timeframe.toLowerCase() === 'today' ? 1 : timeframe.toLowerCase() === 'weekly' ? 7 : 30;
+        const cutoff = now - days * 24 * 60 * 60 * 1000;
+        return logs.filter(l => {
+          const t = l.created_at ? new Date(l.created_at).getTime() : 0;
+          return t >= cutoff;
+        });
+      };
+
+      // Only registered typists (exclude anonymous temporary guests)
+      const registeredUsers = (leaderboardData || []).filter(u => u && !String(u.id).startsWith('guest_'));
+
+      // Calculate user performance metrics dynamically
+      const computedLeaderboard = registeredUsers.map((user) => {
+        const logs = filterLogs(user.test_logs || []);
+        const testsCompleted = logs.length;
+
+        if (testsCompleted === 0) {
+          return {
+            id: user.id,
+            user: user.full_name || user.displayName || user.username || 'Typist',
+            name: user.full_name || user.displayName || user.username || 'Typist',
+            email: user.email,
+            wpm: 0,
+            accuracy: 0, // Set accuracy to 0% (not default 98%) when no tests taken
+            testsCompleted: 0,
+            tier: 'Unranked',
+            status: user.status || 'Active'
+          };
+        }
+
+        // Compute peak speed and average accuracy for active typists
+        const maxWpm = Math.max(...logs.map((l) => Number(l.wpm) || 0));
+        const avgAccuracy = (
+          logs.reduce((acc, l) => acc + (Number(l.accuracy) || 0), 0) / testsCompleted
+        ).toFixed(1);
+
+        let tier = 'Bronze';
+        if (maxWpm >= 80) tier = 'Master';
+        else if (maxWpm >= 50) tier = 'Gold';
+        else if (maxWpm >= 30) tier = 'Silver';
+
+        return {
+          id: user.id,
+          user: user.full_name || user.displayName || user.username || 'Typist',
+          name: user.full_name || user.displayName || user.username || 'Typist',
+          email: user.email,
+          wpm: maxWpm,
+          accuracy: parseFloat(avgAccuracy),
+          testsCompleted,
+          tier,
+          status: user.status || 'Active'
+        };
+      });
+
+      // Sort: Active users first, then by WPM (desc), then Accuracy (desc), then Tests (desc)
+      const sortedLeaderboard = computedLeaderboard.sort((a, b) => {
+        if (a.testsCompleted === 0 && b.testsCompleted > 0) return 1;
+        if (a.testsCompleted > 0 && b.testsCompleted === 0) return -1;
+        if (b.wpm !== a.wpm) return b.wpm - a.wpm;
+        if (b.accuracy !== a.accuracy) return b.accuracy - a.accuracy;
+        return b.testsCompleted - a.testsCompleted;
+      });
+
+      // Assign sequential dynamic ranks (#1, #2, #3, ...)
+      const rankedUsers = sortedLeaderboard.map((user, index) => ({
+        ...user,
+        rank: index + 1
+      }));
+
+      setLeaderboardList(rankedUsers);
+    } catch (err) {
+      console.error('Error in fetchGlobalLeaderboard:', err);
+      const fallbackList = adminService.getLeaderboardRankings(timeframe);
+      setLeaderboardList(fallbackList || []);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchGlobalLeaderboard();
+  }, [timeframe]);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingBadge, setEditingBadge] = useState(null);
@@ -83,9 +220,10 @@ export default function AdminAchievementsView() {
   };
 
   const handleExportAchievements = () => {
-    adminService.exportAchievementsToExcel(badges, rankings);
+    adminService.exportAchievementsToExcel(badges, leaderboardList);
     showToast('Leaderboard & Achievements exported to Excel (.xlsx)!');
   };
+
 
   return (
     <div style={{ padding: '24px 32px', backgroundColor: '#F8FAFC', minHeight: 'calc(100vh - 70px)' }}>
@@ -228,7 +366,7 @@ export default function AdminAchievementsView() {
         </div>
 
         {activeTab === 'leaderboard' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ fontSize: '0.78rem', color: '#64748B', fontWeight: 600 }}>Period:</span>
             <select
               value={timeframe}
@@ -249,6 +387,24 @@ export default function AdminAchievementsView() {
               <option value="Monthly">Monthly</option>
               <option value="Weekly">Weekly</option>
             </select>
+            <button
+              onClick={fetchGlobalLeaderboard}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '5px 8px',
+                borderRadius: '8px',
+                border: '1px solid #E2E8F0',
+                background: '#FFFFFF',
+                fontSize: '0.78rem',
+                color: '#475569',
+                cursor: 'pointer'
+              }}
+              title="Refresh Leaderboard"
+            >
+              <RefreshCw size={13} className={loading ? 'spin' : ''} />
+            </button>
           </div>
         )}
       </div>
@@ -264,77 +420,95 @@ export default function AdminAchievementsView() {
             overflow: 'hidden'
           }}
         >
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.84rem' }}>
-            <thead>
-              <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B' }}>
-                <th style={{ padding: '14px 18px', width: '80px' }}>Rank</th>
-                <th style={{ padding: '14px 18px' }}>User</th>
-                <th style={{ padding: '14px 18px' }}>Email</th>
-                <th style={{ padding: '14px 18px', textAlign: 'center' }}>Speed</th>
-                <th style={{ padding: '14px 18px', textAlign: 'center' }}>Accuracy</th>
-                <th style={{ padding: '14px 18px', textAlign: 'center' }}>Tests Completed</th>
-                <th style={{ padding: '14px 18px' }}>Tier</th>
-                <th style={{ padding: '14px 18px' }}>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rankings.map((r) => (
-                <tr
-                  key={r.rank}
-                  style={{
-                    borderBottom: '1px solid #F1F5F9',
-                    background: r.rank === 1 ? '#FFFDF5' : '#FFFFFF'
-                  }}
-                >
-                  <td style={{ padding: '14px 18px', fontWeight: 800 }}>
-                    {r.rank === 1 ? '🥇 #1' : r.rank === 2 ? '🥈 #2' : r.rank === 3 ? '🥉 #3' : `#${r.rank}`}
-                  </td>
-                  <td style={{ padding: '14px 18px', fontWeight: 700, color: '#0F172A' }}>
-                    {r.user}
-                  </td>
-                  <td style={{ padding: '14px 18px', color: '#64748B' }}>{r.email}</td>
-                  <td style={{ padding: '14px 18px', textAlign: 'center', fontWeight: 800, color: '#4F46E5' }}>
-                    {r.wpm} WPM
-                  </td>
-                  <td style={{ padding: '14px 18px', textAlign: 'center', fontWeight: 700, color: '#10B981' }}>
-                    {r.accuracy}%
-                  </td>
-                  <td style={{ padding: '14px 18px', textAlign: 'center', color: '#334155', fontWeight: 600 }}>
-                    {r.testsCompleted}
-                  </td>
-                  <td style={{ padding: '14px 18px' }}>
-                    <span
-                      style={{
-                        padding: '3px 8px',
-                        borderRadius: '6px',
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        background: r.tier === 'Master' ? '#F5F3FF' : '#EFF6FF',
-                        color: r.tier === 'Master' ? '#7C3AED' : '#2563EB',
-                        border: `1px solid ${r.tier === 'Master' ? '#DDD6FE' : '#BFDBFE'}`
-                      }}
-                    >
-                      {r.tier}
-                    </span>
-                  </td>
-                  <td style={{ padding: '14px 18px' }}>
-                    <span
-                      style={{
-                        padding: '3px 8px',
-                        borderRadius: '999px',
-                        fontSize: '0.7rem',
-                        fontWeight: 700,
-                        background: r.status === 'Active' ? '#ECFDF5' : '#FEF2F2',
-                        color: r.status === 'Active' ? '#059669' : '#DC2626'
-                      }}
-                    >
-                      {r.status}
-                    </span>
-                  </td>
+          {loading && leaderboardList.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '48px 20px', color: '#64748B' }}>
+              <RefreshCw size={24} className="spin" style={{ margin: '0 auto 10px auto', display: 'block' }} />
+              <p style={{ margin: 0, fontSize: '0.86rem' }}>Calculating dynamic global rankings...</p>
+            </div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.84rem' }}>
+              <thead>
+                <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B' }}>
+                  <th style={{ padding: '14px 18px', width: '80px' }}>Rank</th>
+                  <th style={{ padding: '14px 18px' }}>User</th>
+                  <th style={{ padding: '14px 18px' }}>Email</th>
+                  <th style={{ padding: '14px 18px', textAlign: 'center' }}>Speed</th>
+                  <th style={{ padding: '14px 18px', textAlign: 'center' }}>Accuracy</th>
+                  <th style={{ padding: '14px 18px', textAlign: 'center' }}>Tests Completed</th>
+                  <th style={{ padding: '14px 18px' }}>Tier</th>
+                  <th style={{ padding: '14px 18px' }}>Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {leaderboardList.map((r) => (
+                  <tr
+                    key={r.id || r.rank}
+                    style={{
+                      borderBottom: '1px solid #F1F5F9',
+                      background: r.rank === 1 ? '#FFFDF5' : '#FFFFFF'
+                    }}
+                  >
+                    <td style={{ padding: '14px 18px', fontWeight: 800 }}>
+                      {r.rank === 1 ? '🥇 #1' : r.rank === 2 ? '🥈 #2' : r.rank === 3 ? '🥉 #3' : `#${r.rank}`}
+                    </td>
+                    <td style={{ padding: '14px 18px', fontWeight: 700, color: '#0F172A' }}>
+                      {r.name || r.user}
+                    </td>
+                    <td style={{ padding: '14px 18px', color: '#64748B' }}>{r.email || 'N/A'}</td>
+                    <td style={{ padding: '14px 18px', textAlign: 'center', fontWeight: 800, color: r.wpm > 0 ? '#4F46E5' : '#94A3B8' }}>
+                      {r.wpm} WPM
+                    </td>
+                    <td style={{ padding: '14px 18px', textAlign: 'center', fontWeight: 700, color: r.accuracy > 0 ? '#10B981' : '#94A3B8' }}>
+                      {r.accuracy}%
+                    </td>
+                    <td style={{ padding: '14px 18px', textAlign: 'center', color: '#334155', fontWeight: 600 }}>
+                      {r.testsCompleted}
+                    </td>
+                    <td style={{ padding: '14px 18px' }}>
+                      <span
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: '6px',
+                          fontSize: '0.72rem',
+                          fontWeight: 700,
+                          background: r.tier === 'Master' ? '#F5F3FF' :
+                                      r.tier === 'Gold' ? '#FEF3C7' :
+                                      r.tier === 'Silver' ? '#F1F5F9' :
+                                      r.tier === 'Bronze' ? '#FFF7ED' : '#F8FAFC',
+                          color: r.tier === 'Master' ? '#7C3AED' :
+                                 r.tier === 'Gold' ? '#D97706' :
+                                 r.tier === 'Silver' ? '#475569' :
+                                 r.tier === 'Bronze' ? '#C2410C' : '#94A3B8',
+                          border: `1px solid ${
+                            r.tier === 'Master' ? '#DDD6FE' :
+                            r.tier === 'Gold' ? '#FDE68A' :
+                            r.tier === 'Silver' ? '#CBD5E1' :
+                            r.tier === 'Bronze' ? '#FFEDD5' : '#E2E8F0'
+                          }`
+                        }}
+                      >
+                        {r.tier}
+                      </span>
+                    </td>
+                    <td style={{ padding: '14px 18px' }}>
+                      <span
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: '999px',
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          background: r.status === 'Active' ? '#ECFDF5' : '#FEF2F2',
+                          color: r.status === 'Active' ? '#059669' : '#DC2626'
+                        }}
+                      >
+                        {r.status || 'Active'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 

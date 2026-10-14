@@ -453,10 +453,10 @@ export default function AdminSettingsView({ currentUser, onUserUpdate }) {
                 </div>
                 <div>
                   <div style={{ fontSize: '1rem', fontWeight: 700, color: '#0F172A' }}>
-                    Gemini AI Text Generator Configuration
+                    Gemini AI & Assistant Configuration
                   </div>
                   <div style={{ fontSize: '0.74rem', color: '#64748B' }}>
-                    Configure Google Gemini API key for dynamic typing test passages
+                    Shared Google Gemini API credential powering passage generation and TypeMaster AI Assistant
                   </div>
                 </div>
               </div>
@@ -573,11 +573,11 @@ export default function AdminSettingsView({ currentUser, onUserUpdate }) {
                     color: '#0F172A'
                   }}
                 >
-                  <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended — Ultra-Fast & Precision)</option>
-                  <option value="gemini-2.5-pro">gemini-2.5-pro (Advanced Reasoning & Deep Knowledge)</option>
-                  <option value="gemini-2.0-flash">gemini-2.0-flash (Next-Gen High Speed Flash)</option>
-                  <option value="gemini-1.5-flash">gemini-1.5-flash (Standard Fast Generation)</option>
-                  <option value="gemini-1.5-pro">gemini-1.5-pro (Complex Content & Long Form)</option>
+                  <option value="gemini-3.5-flash">gemini-3.5-flash (Recommended — Fast, Accurate & Low Latency)</option>
+                  <option value="gemini-3.8-flash">gemini-3.8-flash (Gemini 3.8 Flash High Performance)</option>
+                  <option value="gemini-3-flash-preview">gemini-3-flash-preview (Next-Gen Fast Preview)</option>
+                  <option value="gemini-3.6-flash">gemini-3.6-flash (Stable Multi-turn Flash)</option>
+                  <option value="gemini-flash-latest">gemini-flash-latest (Auto-Adaptive Latest Flash)</option>
                 </select>
               </div>
 

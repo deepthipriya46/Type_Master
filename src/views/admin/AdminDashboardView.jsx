@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Users,
   UserCheck,
@@ -12,7 +12,8 @@ import {
   CheckCircle2,
   Clock,
   RotateCw,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Activity
 } from 'lucide-react';
 import { adminService } from '../../services/adminService';
 import { supabaseService } from '../../services/supabaseService';
@@ -20,6 +21,11 @@ import { supabaseService } from '../../services/supabaseService';
 export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytics, dateRange = 'All Time', onDateRangeChange }) {
   const [loading, setLoading] = useState(true);
   const [toastMsg, setToastMsg] = useState('');
+  const [realtimeStatus, setRealtimeStatus] = useState('connecting'); // 'connected' | 'connecting' | 'offline'
+
+  const isMountedRef = useRef(true);
+  const debounceTimerRef = useRef(null);
+  const latestRequestIdRef = useRef(0);
 
   const showToast = (msg) => {
     setToastMsg(msg);
@@ -48,72 +54,112 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
     showToast('Dashboard metrics exported to Excel (.xlsx)!');
   };
 
-  const loadLiveMetrics = useCallback(async () => {
-    setLoading(true);
+  const loadLiveMetrics = useCallback(async (isSilent = false) => {
+    if (!isSilent) setLoading(true);
+    const requestId = ++latestRequestIdRef.current;
     try {
       const data = await adminService.getLiveDashboardMetrics(dateRange);
-      setMetrics(data);
+      if (typeof window !== 'undefined') {
+        window.__latestDashboardData = data;
+      }
+      if (isMountedRef.current && requestId === latestRequestIdRef.current) {
+        setMetrics(data);
+        if (supabaseService.isConfigured()) {
+          setRealtimeStatus('connected');
+        }
+      }
     } catch (err) {
       console.warn('Dashboard live query warning:', err);
     } finally {
-      setLoading(false);
+      if (isMountedRef.current && !isSilent) {
+        setLoading(false);
+      }
     }
   }, [dateRange]);
+
+  const triggerDebouncedSync = useCallback(() => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      loadLiveMetrics(true);
+    }, 250);
+  }, [loadLiveMetrics]);
 
   // Handlers for instant real-time telemetry updates
   const handleIncomingTest = useCallback((testPayload) => {
     if (!testPayload) return;
     setMetrics((prev) => {
+      const attemptId = testPayload.id || `att_${Date.now()}`;
+      if (prev.latestTestAttempts.some(att => String(att.id) === String(attemptId))) {
+        return prev;
+      }
+
       const newTestsCompleted = prev.testsCompleted + 1;
       const wpmVal = Number(testPayload.wpm) || 0;
       const prevTotal = prev.avgWpm * prev.testsCompleted;
       const newAvgWpm = Math.round((prevTotal + wpmVal) / Math.max(1, newTestsCompleted));
 
+      let durationStr = '60s';
+      if (typeof testPayload.duration === 'number') {
+        durationStr = testPayload.duration >= 60 ? `${Math.round(testPayload.duration / 60)} min` : `${testPayload.duration}s`;
+      } else if (testPayload.duration) {
+        durationStr = String(testPayload.duration);
+      }
+
       const newAttemptRow = {
-        id: prev.latestTestAttempts.length + 1,
+        id: attemptId,
+        user_id: testPayload.user_id,
         user: testPayload.userName || 'Registered Typist',
         type: testPayload.category || 'General',
-        wpm: testPayload.wpm || 0,
-        accuracy: `${testPayload.accuracy || 0}%`,
-        time: testPayload.duration ? `${Math.round(testPayload.duration / 60) || 1} min` : '1 min',
-        date: 'Just now'
+        wpm: wpmVal,
+        accuracy: `${Number(testPayload.accuracy) || 0}%`,
+        errors: Number(testPayload.errors) || 0,
+        time: durationStr,
+        date: 'Just now',
+        status: testPayload.is_valid === false ? 'Flagged' : (testPayload.result_badge || 'Completed'),
+        is_valid: testPayload.is_valid !== false
       };
 
       return {
         ...prev,
         testsCompleted: newTestsCompleted,
         avgWpm: newAvgWpm,
-        latestTestAttempts: [newAttemptRow, ...prev.latestTestAttempts.slice(0, 7)]
+        latestTestAttempts: [newAttemptRow, ...prev.latestTestAttempts.filter(a => String(a.id) !== String(attemptId)).slice(0, 6)]
       };
     });
-    // Silent background sync
-    adminService.getLiveDashboardMetrics(dateRange).then(data => setMetrics(data)).catch(() => {});
-  }, [dateRange]);
+    // Reconcile and calculate updated rankings from database
+    triggerDebouncedSync();
+  }, [triggerDebouncedSync]);
 
   const handleIncomingProfile = useCallback((profilePayload) => {
     if (!profilePayload) return;
     setMetrics((prev) => {
+      const userId = profilePayload.id || `usr_${Date.now()}`;
+      if (prev.recentUsers.some(u => String(u.id) === String(userId))) {
+        return prev;
+      }
       const newTotalUsers = prev.totalUsers + 1;
+      const displayName = profilePayload.display_name || profilePayload.displayName || profilePayload.username || 'Typist';
       const newUserRow = {
-        id: profilePayload.id || `usr_${Date.now()}`,
-        name: profilePayload.display_name || profilePayload.username || 'Typist',
-        email: profilePayload.email || '',
+        id: userId,
+        name: displayName,
+        email: profilePayload.email || '—',
         status: profilePayload.status || 'Active',
-        joinedOn: 'Today',
+        joinedOn: 'Just now',
         testsTaken: 0,
         avgWpm: 0,
         highestWpm: 0,
-        accuracy: 0
+        accuracy: 0,
+        user: profilePayload
       };
 
       return {
         ...prev,
         totalUsers: newTotalUsers,
-        recentUsers: [newUserRow, ...prev.recentUsers.slice(0, 4)]
+        recentUsers: [newUserRow, ...prev.recentUsers.filter(u => String(u.id) !== String(userId)).slice(0, 4)]
       };
     });
-    adminService.getLiveDashboardMetrics(dateRange).then(data => setMetrics(data)).catch(() => {});
-  }, [dateRange]);
+    triggerDebouncedSync();
+  }, [triggerDebouncedSync]);
 
   const handleIncomingFeedback = useCallback((fbPayload) => {
     if (!fbPayload) return;
@@ -132,51 +178,78 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
     });
   }, []);
 
-  // TWO-WAY REAL-TIME SUBSCRIPTION: supabase.channel('admin-live-feed')
+  // MULTI-TRANSPORT REAL-TIME SUBSCRIPTION: Supabase Realtime + BroadcastChannel + CustomEvents
   useEffect(() => {
-    loadLiveMetrics();
+    isMountedRef.current = true;
+    loadLiveMetrics(false);
 
     let channel = null;
 
     if (supabaseService.isConfigured()) {
-      channel = supabaseService.supabase
-        .channel('admin-live-feed')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'test_sessions' },
-          (payload) => {
-            handleIncomingTest(payload.new);
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'test_logs' },
-          (payload) => {
-            handleIncomingTest(payload.new);
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'profiles' },
-          (payload) => {
-            handleIncomingProfile(payload.new);
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'users' },
-          (payload) => {
-            handleIncomingProfile(payload.new);
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'feedback' },
-          (payload) => {
-            handleIncomingFeedback(payload.new);
-          }
-        )
-        .subscribe();
+      try {
+        channel = supabaseService.supabase
+          .channel('admin-live-feed')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'test_logs' },
+            (payload) => {
+              if (payload.new) handleIncomingTest(payload.new);
+              else triggerDebouncedSync();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'users' },
+            (payload) => {
+              if (payload.new) handleIncomingProfile(payload.new);
+              else triggerDebouncedSync();
+            }
+          )
+          .on(
+            'broadcast',
+            { event: 'TEST_COMPLETED' },
+            (payload) => {
+              handleIncomingTest(payload.payload);
+            }
+          )
+          .on(
+            'broadcast',
+            { event: 'USER_REGISTERED' },
+            (payload) => {
+              handleIncomingProfile(payload.payload);
+            }
+          )
+          .on(
+            'broadcast',
+            { event: 'ADMIN_CREATED' },
+            (payload) => {
+              handleIncomingProfile(payload.payload);
+            }
+          )
+          .on(
+            'broadcast',
+            { event: 'FEEDBACK_SUBMITTED' },
+            (payload) => {
+              handleIncomingFeedback(payload.payload);
+            }
+          )
+          .subscribe((status) => {
+            if (isMountedRef.current) {
+              if (status === 'SUBSCRIBED') {
+                setRealtimeStatus('connected');
+              } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                setRealtimeStatus('sync');
+              } else {
+                setRealtimeStatus('connecting');
+              }
+            }
+          });
+      } catch (err) {
+        console.warn('Realtime subscription notice:', err);
+        setRealtimeStatus('sync');
+      }
+    } else {
+      setRealtimeStatus('sync');
     }
 
     // Cross-tab BroadcastChannel for zero-latency instant telemetry across portals
@@ -184,6 +257,7 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
     try {
       bc = new BroadcastChannel('admin-live-feed');
       bc.onmessage = (event) => {
+        if (!isMountedRef.current) return;
         if (event.data?.type === 'TEST_COMPLETED') {
           handleIncomingTest(event.data.payload);
         } else if (event.data?.type === 'USER_REGISTERED' || event.data?.type === 'ADMIN_CREATED') {
@@ -197,6 +271,7 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
     }
 
     const handleLocalEvent = (e) => {
+      if (!isMountedRef.current) return;
       if (e.detail?.type === 'TEST_COMPLETED') {
         handleIncomingTest(e.detail.payload);
       } else if (e.detail?.type === 'USER_REGISTERED' || e.detail?.type === 'ADMIN_CREATED') {
@@ -207,14 +282,32 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
     };
     window.addEventListener('typemaster-admin-feed', handleLocalEvent);
 
+    // Periodic background sync every 20 seconds for guaranteed consistency
+    const syncInterval = setInterval(() => {
+      if (isMountedRef.current) {
+        loadLiveMetrics(true);
+      }
+    }, 20000);
+
+    const handleWindowFocus = () => {
+      if (isMountedRef.current) {
+        loadLiveMetrics(true);
+      }
+    };
+    window.addEventListener('focus', handleWindowFocus);
+
     return () => {
+      isMountedRef.current = false;
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      clearInterval(syncInterval);
+      window.removeEventListener('focus', handleWindowFocus);
       if (channel && supabaseService.isConfigured()) {
         supabaseService.supabase.removeChannel(channel);
       }
       if (bc) bc.close();
       window.removeEventListener('typemaster-admin-feed', handleLocalEvent);
     };
-  }, [loadLiveMetrics, handleIncomingTest, handleIncomingProfile, handleIncomingFeedback]);
+  }, [loadLiveMetrics, triggerDebouncedSync, handleIncomingTest, handleIncomingProfile, handleIncomingFeedback]);
 
   // SVG Chart dimensions
   const chartW = 460;
@@ -257,14 +350,50 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
         </div>
       )}
 
-      {/* Page Title & Subtitle */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+      {/* Page Title & Subtitle with Live Indicator */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '14px' }}>
         <div>
-          <h1 style={{ fontSize: '1.65rem', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.3px', margin: 0 }}>
-            Dashboard
-          </h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <h1 style={{ fontSize: '1.65rem', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.3px', margin: 0 }}>
+              Dashboard
+            </h1>
+            <div
+              title={realtimeStatus === 'connected' ? 'Real-time database connection active' : 'Connecting to database...'}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 10px',
+                borderRadius: '999px',
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                background: (realtimeStatus === 'connected' || realtimeStatus === 'sync') ? '#ECFDF5' : (realtimeStatus === 'connecting' ? '#FEF3C7' : '#F1F5F9'),
+                color: (realtimeStatus === 'connected' || realtimeStatus === 'sync') ? '#059669' : (realtimeStatus === 'connecting' ? '#D97706' : '#64748B'),
+                border: `1px solid ${(realtimeStatus === 'connected' || realtimeStatus === 'sync') ? '#A7F3D0' : (realtimeStatus === 'connecting' ? '#FDE68A' : '#E2E8F0')}`
+              }}
+            >
+              <span
+                style={{
+                  width: '7px',
+                  height: '7px',
+                  borderRadius: '50%',
+                  backgroundColor: (realtimeStatus === 'connected' || realtimeStatus === 'sync') ? '#10B981' : (realtimeStatus === 'connecting' ? '#F59E0B' : '#94A3B8'),
+                  boxShadow: (realtimeStatus === 'connected' || realtimeStatus === 'sync') ? '0 0 6px rgba(16, 185, 129, 0.7)' : 'none'
+                }}
+              />
+              <span>
+                {realtimeStatus === 'connected'
+                  ? 'Live Updates Active'
+                  : realtimeStatus === 'sync'
+                  ? 'Live Sync Active'
+                  : realtimeStatus === 'connecting'
+                  ? 'Connecting...'
+                  : 'Offline Fallback'}
+              </span>
+            </div>
+          </div>
           <p style={{ fontSize: '0.86rem', color: '#64748B', marginTop: '4px', marginBottom: 0 }}>
-            Live platform metrics, telemetry, and user activity (Supabase Live Connected)
+            Live platform metrics, telemetry, and user activity (Supabase Real-Time)
           </p>
         </div>
 
@@ -292,7 +421,7 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
           </button>
 
           <button
-            onClick={loadLiveMetrics}
+            onClick={() => loadLiveMetrics(false)}
             title="Refresh Live Metrics"
             style={{
               display: 'inline-flex',
@@ -631,7 +760,7 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
               <div style={{ fontSize: '0.96rem', fontWeight: 700, color: '#0F172A' }}>Recent Users</div>
               <div style={{ fontSize: '0.74rem', color: '#64748B' }}>Actual registered accounts</div>
             </div>
-            <button onClick={() => onNavigate('users')} style={viewAllButtonStyle}>
+            <button onClick={() => onNavigate('users')} style={viewAllButtonStyle} title="View all registered users">
               View All <ArrowRight size={13} />
             </button>
           </div>
@@ -652,7 +781,7 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
                 {metrics.recentUsers.length === 0 ? (
                   <tr>
                     <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: '#94A3B8' }}>
-                      No users registered yet.
+                      No registered users found.
                     </td>
                   </tr>
                 ) : (
@@ -668,7 +797,7 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
                       <td style={{ padding: '10px 10px', textAlign: 'center' }}>
                         <button
                           onClick={() => {
-                            if (onSelectUserForAnalytics) onSelectUserForAnalytics(u);
+                            if (onSelectUserForAnalytics) onSelectUserForAnalytics(u.user || u);
                             onNavigate('performance');
                           }}
                           title="View user performance"
@@ -692,7 +821,7 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
               <div style={{ fontSize: '0.96rem', fontWeight: 700, color: '#0F172A' }}>Top Performing Users</div>
               <div style={{ fontSize: '0.74rem', color: '#64748B' }}>Highest verified WPM & precision</div>
             </div>
-            <button onClick={() => onNavigate('achievements')} style={viewAllButtonStyle}>
+            <button onClick={() => onNavigate('performance')} style={viewAllButtonStyle} title="View all user performances">
               View All <ArrowRight size={13} />
             </button>
           </div>
@@ -727,7 +856,14 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
                       <td style={{ padding: '10px 10px', color: '#10B981', fontWeight: 600 }}>{tp.accuracy}%</td>
                       <td style={{ padding: '10px 10px', color: '#64748B' }}>{tp.tests}</td>
                       <td style={{ padding: '10px 10px', textAlign: 'center' }}>
-                        <button onClick={() => onNavigate('performance')} title="View Performance" style={smallActionButtonStyle}>
+                        <button
+                          onClick={() => {
+                            if (onSelectUserForAnalytics) onSelectUserForAnalytics(tp.user || tp);
+                            onNavigate('performance');
+                          }}
+                          title="View user performance"
+                          style={smallActionButtonStyle}
+                        >
                           <BarChart2 size={14} color="#6366F1" />
                         </button>
                       </td>
@@ -746,7 +882,7 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
               <div style={{ fontSize: '0.96rem', fontWeight: 700, color: '#0F172A' }}>Latest Test Attempts</div>
               <div style={{ fontSize: '0.74rem', color: '#64748B' }}>Real telemetry submissions</div>
             </div>
-            <button onClick={() => onNavigate('reports')} style={viewAllButtonStyle}>
+            <button onClick={() => onNavigate('reports')} style={viewAllButtonStyle} title="View all telemetry reports">
               View All <ArrowRight size={13} />
             </button>
           </div>
@@ -760,21 +896,23 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
                   <th style={{ padding: '8px 10px' }}>Test Type</th>
                   <th style={{ padding: '8px 10px' }}>WPM</th>
                   <th style={{ padding: '8px 10px' }}>Accuracy</th>
+                  <th style={{ padding: '8px 10px' }}>Errors</th>
                   <th style={{ padding: '8px 10px' }}>Time</th>
-                  <th style={{ padding: '8px 10px' }}>Date</th>
+                  <th style={{ padding: '8px 10px' }}>Date & Time</th>
+                  <th style={{ padding: '8px 10px' }}>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {metrics.latestTestAttempts.length === 0 ? (
                   <tr>
-                    <td colSpan={7} style={{ textAlign: 'center', padding: '24px', color: '#94A3B8' }}>
+                    <td colSpan={9} style={{ textAlign: 'center', padding: '24px', color: '#94A3B8' }}>
                       No test sessions recorded yet. Start a test in User Portal to see real-time telemetry here!
                     </td>
                   </tr>
                 ) : (
-                  metrics.latestTestAttempts.map((att) => (
+                  metrics.latestTestAttempts.map((att, i) => (
                     <tr key={att.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                      <td style={{ padding: '10px 10px', color: '#94A3B8' }}>{att.id}</td>
+                      <td style={{ padding: '10px 10px', color: '#94A3B8' }}>{i + 1}</td>
                       <td style={{ padding: '10px 10px', fontWeight: 600, color: '#1E293B' }}>{att.user}</td>
                       <td style={{ padding: '10px 10px', color: '#475569' }}>
                         <span style={{ background: '#F1F5F9', padding: '3px 7px', borderRadius: '6px', fontSize: '0.72rem' }}>
@@ -783,8 +921,14 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
                       </td>
                       <td style={{ padding: '10px 10px', fontWeight: 700, color: '#2563EB' }}>{att.wpm}</td>
                       <td style={{ padding: '10px 10px', fontWeight: 600, color: '#059669' }}>{att.accuracy}</td>
+                      <td style={{ padding: '10px 10px', fontWeight: 600, color: att.errors > 0 ? '#EF4444' : '#10B981' }}>
+                        {att.errors}
+                      </td>
                       <td style={{ padding: '10px 10px', color: '#64748B' }}>{att.time}</td>
-                      <td style={{ padding: '10px 10px', color: '#94A3B8', fontSize: '0.72rem' }}>{att.date}</td>
+                      <td style={{ padding: '10px 10px', color: '#64748B', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>{att.date}</td>
+                      <td style={{ padding: '10px 10px' }}>
+                        <span style={attemptBadgeStyle(att.status)}>{att.status}</span>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -921,6 +1065,32 @@ const statusBadgeStyle = (status) => ({
   color: status === 'Active' ? '#059669' : '#DC2626',
   border: `1px solid ${status === 'Active' ? '#A7F3D0' : '#FECDD3'}`
 });
+
+const attemptBadgeStyle = (status) => {
+  const s = String(status || 'Completed').toLowerCase();
+  if (s.includes('flag') || s.includes('invalid')) {
+    return {
+      display: 'inline-block',
+      padding: '3px 8px',
+      borderRadius: '999px',
+      fontSize: '0.7rem',
+      fontWeight: 700,
+      backgroundColor: '#FEF2F2',
+      color: '#DC2626',
+      border: '1px solid #FECDD3'
+    };
+  }
+  return {
+    display: 'inline-block',
+    padding: '3px 8px',
+    borderRadius: '999px',
+    fontSize: '0.7rem',
+    fontWeight: 700,
+    backgroundColor: '#ECFDF5',
+    color: '#059669',
+    border: '1px solid #A7F3D0'
+  };
+};
 
 const smallActionButtonStyle = {
   background: '#F1F5F9',

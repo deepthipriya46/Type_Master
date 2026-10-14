@@ -1,15 +1,16 @@
-// ==========================================================
-// STANDALONE HTTP BACKEND SERVER
-// Serves /api/typing/generate-text with full security and validation
-// ==========================================================
-
+import fs from 'node:fs';
+import path from 'node:path';
 import http from 'node:http';
 import {
   ALLOWED_CATEGORIES,
   ALLOWED_DIFFICULTIES,
   ALLOWED_LANGUAGES,
   checkRateLimit,
-  generateTextWithGemini
+  generateTextWithGemini,
+  chatWithGemini,
+  getActiveGeminiConfig,
+  getInternalGeminiConfig,
+  updateActiveGeminiConfig
 } from './geminiService.js';
 
 const PORT = process.env.PORT || 3001;
@@ -41,6 +42,94 @@ const server = http.createServer(async (req, res) => {
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ status: 'ok', service: 'TypingMaster Gemini Service' }));
+    return;
+  }
+
+  if (url === '/api/typing/gemini-status' || url === '/api/gemini/status') {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ success: true, ...getActiveGeminiConfig() }));
+    return;
+  }
+
+  if (url === '/api/admin/gemini-config') {
+    if (req.method !== 'POST') {
+      res.statusCode = 405;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: false, message: 'Method Not Allowed' }));
+      return;
+    }
+
+    let rawBody = '';
+    req.on('data', (chunk) => { rawBody += chunk; });
+    req.on('end', async () => {
+      try {
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        const apiKey = (body.apiKey || '').trim();
+        const model = (body.model || 'gemini-3.5-flash').trim();
+
+        updateActiveGeminiConfig({ apiKey, model });
+
+        try {
+          const envPath = path.resolve(process.cwd(), '.env');
+          if (fs.existsSync(envPath)) {
+            let envContent = fs.readFileSync(envPath, 'utf8');
+            if (envContent.includes('GEMINI_API_KEY=')) {
+              envContent = envContent.replace(/GEMINI_API_KEY=.*/, `GEMINI_API_KEY=${apiKey}`);
+            } else {
+              envContent += `\nGEMINI_API_KEY=${apiKey}`;
+            }
+            if (envContent.includes('GEMINI_MODEL=')) {
+              envContent = envContent.replace(/GEMINI_MODEL=.*/, `GEMINI_MODEL=${model}`);
+            } else {
+              envContent += `\nGEMINI_MODEL=${model}`;
+            }
+            fs.writeFileSync(envPath, envContent, 'utf8');
+          }
+        } catch {}
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+          success: true,
+          message: 'Gemini configuration successfully saved and activated.',
+          ...getActiveGeminiConfig()
+        }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ success: false, message: err.message || 'Failed to update configuration.' }));
+      }
+    });
+    return;
+  }
+
+  if (url === '/api/chat' || url === '/api/typing/chat') {
+    if (req.method !== 'POST') {
+      res.statusCode = 405;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: false, message: 'Method Not Allowed' }));
+      return;
+    }
+
+    let rawBody = '';
+    req.on('data', (chunk) => { rawBody += chunk; });
+    req.on('end', async () => {
+      try {
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        const { messages = [], userRole = 'user', portal = 'user', userProfile = null } = body;
+        const clientIp = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'localhost';
+
+        const result = await chatWithGemini({ messages, userRole, portal, userProfile, clientIp });
+        res.statusCode = result.success ? 200 : 400;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ success: false, error: 'Unable to process chat request.' }));
+      }
+    });
     return;
   }
 
@@ -108,7 +197,7 @@ const server = http.createServer(async (req, res) => {
           durationSeconds: Number(durationSeconds) || 60,
           excludeText,
           apiKey: (body.apiKey || '').trim() || req.headers['x-gemini-api-key'] || '',
-          model: body.model || 'gemini-2.5-flash'
+          model: body.model || getActiveGeminiConfig().model || 'gemini-3.5-flash'
         });
 
         res.statusCode = 200;

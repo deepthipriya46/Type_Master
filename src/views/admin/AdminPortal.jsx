@@ -4,7 +4,6 @@ import AdminTopHeader from '../../components/admin/AdminTopHeader';
 import AdminDashboardView from './AdminDashboardView';
 import AdminUsersView from './AdminUsersView';
 import AdminPerformanceView from './AdminPerformanceView';
-import AdminTypingTestsView from './AdminTypingTestsView';
 import AdminPracticeContentView from './AdminPracticeContentView';
 import AdminAchievementsView from './AdminAchievementsView';
 import AdminScheduledTestsView from './AdminScheduledTestsView';
@@ -84,13 +83,6 @@ export default function AdminPortal({
           {currentAdminView === 'performance' && (
             <AdminPerformanceView
               initialUser={selectedUserForAnalytics}
-              dateRange={dateRange}
-              onDateRangeChange={setDateRange}
-            />
-          )}
-
-          {currentAdminView === 'typing-tests' && (
-            <AdminTypingTestsView
               dateRange={dateRange}
               onDateRangeChange={setDateRange}
             />

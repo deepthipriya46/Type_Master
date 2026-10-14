@@ -45,6 +45,13 @@ export function exportDataToCsv(data, filename = 'TypeMaster_Admin_Report.csv') 
   triggerFileDownload(blob, cleanFilename);
 }
 
+const withTimeout = (promise, ms = 4000) => {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`Query timeout after ${ms}ms`)), ms))
+  ]);
+};
+
 // Universal date filter helper for all Admin Portal views
 export function isDateInPeriod(dateInput, period) {
   if (!period || period === 'All Time' || period === 'All') return true;
@@ -80,6 +87,18 @@ export function isDateInPeriod(dateInput, period) {
 
   if (period === 'Today') {
     return ymd === todayYMD;
+  }
+
+  if (typeof period === 'string' && period.includes(' - ')) {
+    const [startStr, endStr] = period.split(' - ').map(s => s.trim());
+    const startDate = new Date(startStr);
+    const endDate = new Date(endStr);
+    if (!isNaN(startDate.getTime()) && !isNaN(endDate.getTime())) {
+      endDate.setHours(23, 59, 59, 999);
+      startDate.setHours(0, 0, 0, 0);
+      const targetTime = new Date(ymd + 'T12:00:00').getTime();
+      return targetTime >= startDate.getTime() && targetTime <= endDate.getTime();
+    }
   }
 
   const parsedTime = new Date(ymd + 'T00:00:00').getTime();
@@ -152,43 +171,314 @@ const INITIAL_TYPING_TESTS = [
   }
 ];
 
-// Initial practice passages
+// Initial practice passages supporting domain categories and Easy/Medium/Hard difficulties
 const INITIAL_PRACTICE_ITEMS = [
+  // --- MATHEMATICS ---
   {
-    id: 'prac_01',
-    category: 'Paragraphs',
-    title: 'Ergonomics and Flow State',
+    id: 'math_01',
+    category: 'Mathematics',
+    title: 'Basic Arithmetic Operations',
+    difficulty: 'Easy',
+    tags: ['#Math', '#Arithmetic', '#Operators', '#Beginner'],
+    focus_keys: ['+', '-', '*', '/', '=', '(', ')'],
+    content: '5 + 3 = 8; 12 - 4 = 8; 10 * 2 = 20; 100 / 5 = 20; (15 + 5) * 2 = 40.',
+    text: '5 + 3 = 8; 12 - 4 = 8; 10 * 2 = 20; 100 / 5 = 20; (15 + 5) * 2 = 40.',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 22,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+  {
+    id: 'math_02',
+    category: 'Mathematics',
+    title: 'Algebraic Equations & Polynomials',
     difficulty: 'Medium',
-    tags: ['Ergonomics', 'Focus', 'Posture'],
-    content: 'Maintaining proper posture and relaxed wrists while typing significantly reduces fatigue and increases long-term endurance. Keep your monitor at eye level and breathe rhythmically.',
-    wordCount: 30
+    tags: ['#Math', '#Algebra', '#Polynomials', '#Formulas'],
+    focus_keys: ['^', '±', '√', '(', ')', '/', '=', '+', '-'],
+    content: 'f(x) = 2x^2 + 5x - 3; a^2 + b^2 = c^2; x = (-b ± √(b^2 - 4ac)) / (2a).',
+    text: 'f(x) = 2x^2 + 5x - 3; a^2 + b^2 = c^2; x = (-b ± √(b^2 - 4ac)) / (2a).',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 18,
+    created_at: '2026-10-10T10:00:00.000Z'
   },
   {
-    id: 'prac_02',
-    category: 'Words',
-    title: 'High-Frequency Common Words',
+    id: 'math_03',
+    category: 'Mathematics',
+    title: 'Advanced Calculus & Sigma Notation',
+    difficulty: 'Hard',
+    tags: ['#Math', '#Calculus', '#Notation', '#Advanced'],
+    focus_keys: ['∫', '∑', '{', '}', '^', '_', '/', '=', '(', ')'],
+    content: 'lim_{x->0} (sin x)/x = 1; ∫(3x^2 + 2x - 7) dx = x^3 + x^2 - 7x + C; ∑_{i=1}^{n} i^2 = n(n+1)(2n+1)/6.',
+    text: 'lim_{x->0} (sin x)/x = 1; ∫(3x^2 + 2x - 7) dx = x^3 + x^2 - 7x + C; ∑_{i=1}^{n} i^2 = n(n+1)(2n+1)/6.',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 20,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+
+  // --- SCIENCE & NATURE ---
+  {
+    id: 'sci_01',
+    category: 'Science & Nature',
+    title: 'Photosynthesis & Terrestrial Ecology',
     difficulty: 'Easy',
-    tags: ['Vocabulary', 'Drill', 'Beginner'],
-    content: 'the of and to a in is that for it as was with on be at by this from they we say her she or an will my one all would there their what',
-    wordCount: 35
+    tags: ['#Science', '#Biology', '#Nature', '#Ecology'],
+    focus_keys: ['P', 'l', 'a', 'n', 't', 's', 'o', 'x', 'y'],
+    content: 'Plants convert sunlight, water, and carbon dioxide into oxygen and glucose through photosynthesis, sustaining terrestrial ecosystems worldwide.',
+    text: 'Plants convert sunlight, water, and carbon dioxide into oxygen and glucose through photosynthesis, sustaining terrestrial ecosystems worldwide.',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 20,
+    created_at: '2026-10-10T10:00:00.000Z'
   },
   {
-    id: 'prac_03',
-    category: 'Quotes',
-    title: 'Perseverance & Mastery',
+    id: 'sci_02',
+    category: 'Science & Nature',
+    title: 'Chemical Reactions & Energy Conversion',
+    difficulty: 'Medium',
+    tags: ['#Chemistry', '#Physics', '#Equations', '#Atoms'],
+    focus_keys: ['->', '2', '6', '=', '^', '+'],
+    content: '2H2 + O2 -> 2H2O; photosynthesis: 6CO2 + 6H2O + light -> C6H12O6 + 6O2; Einstein relation: E = mc^2.',
+    text: '2H2 + O2 -> 2H2O; photosynthesis: 6CO2 + 6H2O + light -> C6H12O6 + 6O2; Einstein relation: E = mc^2.',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 19,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+  {
+    id: 'sci_03',
+    category: 'Science & Nature',
+    title: 'Quantum Mechanics & Thermodynamics',
+    difficulty: 'Hard',
+    tags: ['#Quantum', '#Physics', '#Thermodynamics', '#Formulas'],
+    focus_keys: ['Delta', 'hbar', 'psi', '>=', '*', '/', '_'],
+    content: 'Delta S >= 0; Schrödinger wave equation: i*hbar * d(psi)/dt = H_hat(psi); Heisenberg uncertainty: Delta x * Delta p >= hbar / 2.',
+    text: 'Delta S >= 0; Schrödinger wave equation: i*hbar * d(psi)/dt = H_hat(psi); Heisenberg uncertainty: Delta x * Delta p >= hbar / 2.',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 22,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+
+  // --- TECHNOLOGY ---
+  {
+    id: 'tech_01',
+    category: 'Technology',
+    title: 'Cloud Infrastructure & Networks',
     difficulty: 'Easy',
-    tags: ['Inspiration', 'Philosophy'],
-    content: '"We are what we repeatedly do. Excellence, then, is not an act, but a habit." - Will Durant',
-    wordCount: 18
+    tags: ['#Tech', '#Cloud', '#Internet', '#Networks'],
+    focus_keys: ['C', 'l', 'o', 'u', 'd', '9', '%'],
+    content: 'Cloud computing delivers scalable server storage, databases, and software over high speed fiber optic networks with 99.9% uptime.',
+    text: 'Cloud computing delivers scalable server storage, databases, and software over high speed fiber optic networks with 99.9% uptime.',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 19,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+  {
+    id: 'tech_02',
+    category: 'Technology',
+    title: 'Network Protocols & TLS Handshake',
+    difficulty: 'Medium',
+    tags: ['#Cybersecurity', '#TLS', '#Protocols', '#AES'],
+    focus_keys: ['-', ':', '.', '1', '3', '2', '5', '6'],
+    content: 'HTTPS encrypts transport payloads via TLS 1.3 handshake using AES-256-GCM cipher suites across TCP port 443.',
+    text: 'HTTPS encrypts transport payloads via TLS 1.3 handshake using AES-256-GCM cipher suites across TCP port 443.',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 16,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+  {
+    id: 'tech_03',
+    category: 'Technology',
+    title: 'Distributed Consensus & Neural Layers',
+    difficulty: 'Hard',
+    tags: ['#DistributedSystems', '#Consensus', '#AI', '#Neural'],
+    focus_keys: ['[', ']', ':', '_', '*', '=', '(', ')'],
+    content: 'Raft consensus maintains replicated state machines: term_index = 42; commit_log.append(block_hash[:16]); loss = -sum(y * log(y_hat)).',
+    text: 'Raft consensus maintains replicated state machines: term_index = 42; commit_log.append(block_hash[:16]); loss = -sum(y * log(y_hat)).',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 17,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+
+  // --- CODE PASSAGES ---
+  {
+    id: 'prac_04_easy',
+    category: 'Code Passages',
+    title: 'JavaScript Array Filter',
+    difficulty: 'Easy',
+    tags: ['#JavaScript', '#Arrays', '#Frontend'],
+    focus_keys: ['=', '>', '(', ')', '.', '&'],
+    content: 'const activeUsers = users.filter(user => user.isActive && user.age >= 18);',
+    text: 'const activeUsers = users.filter(user => user.isActive && user.age >= 18);',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 11,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+  {
+    id: 'code_02',
+    category: 'Code Passages',
+    title: 'Python Async Request Handler',
+    difficulty: 'Medium',
+    tags: ['#Python', '#Async', '#API', '#Backend'],
+    focus_keys: [':', '->', '(', ')', '"', '/', '{', '}'],
+    content: 'async def fetch_user(user_id: str) -> dict:\n    async with aiohttp.ClientSession() as s:\n        res = await s.get(f"/api/users/{user_id}")\n        return await res.json()',
+    text: 'async def fetch_user(user_id: str) -> dict:\n    async with aiohttp.ClientSession() as s:\n        res = await s.get(f"/api/users/{user_id}")\n        return await res.json()',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 26,
+    created_at: '2026-10-10T10:00:00.000Z'
   },
   {
     id: 'prac_04',
     category: 'Code Passages',
     title: 'React Functional Hook',
     difficulty: 'Hard',
-    tags: ['JavaScript', 'React', 'Frontend'],
+    tags: ['#JavaScript', '#React', '#Frontend'],
+    focus_keys: ['{', '}', '(', ')', '=>', '=', ';'],
     content: 'const useDebounce = (value, delay = 300) => {\n  const [debouncedValue, setDebouncedValue] = useState(value);\n  useEffect(() => {\n    const handler = setTimeout(() => setDebouncedValue(value), delay);\n    return () => clearTimeout(handler);\n  }, [value, delay]);\n  return debouncedValue;\n};',
-    wordCount: 42
+    text: 'const useDebounce = (value, delay = 300) => {\n  const [debouncedValue, setDebouncedValue] = useState(value);\n  useEffect(() => {\n    const handler = setTimeout(() => setDebouncedValue(value), delay);\n    return () => clearTimeout(handler);\n  }, [value, delay]);\n  return debouncedValue;\n};',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 42,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+
+  // --- PARAGRAPHS ---
+  {
+    id: 'prac_01',
+    category: 'Paragraphs',
+    title: 'Ergonomics and Flow State',
+    difficulty: 'Easy',
+    tags: ['#Ergonomics', '#Focus', '#Posture'],
+    focus_keys: ['E', 'r', 'g', 'o', 'n', 'o', 'm', 'i', 'c', 's'],
+    content: 'Maintaining proper posture and relaxed wrists while typing significantly reduces fatigue and increases long-term endurance. Keep your monitor at eye level and breathe rhythmically.',
+    text: 'Maintaining proper posture and relaxed wrists while typing significantly reduces fatigue and increases long-term endurance. Keep your monitor at eye level and breathe rhythmically.',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 25,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+  {
+    id: 'para_02',
+    category: 'Paragraphs',
+    title: 'Habit Formation & Compounding Refinements',
+    difficulty: 'Medium',
+    tags: ['#Habits', '#Compounding', '#Discipline'],
+    focus_keys: ['h', 'a', 'b', 'i', 't', 's', 'f', 'o', 'c', 'u', 's'],
+    content: 'The architecture of human habit formation demonstrates that sustainable progress stems from compounding incremental refinements rather than monumental bursts of exertion. Daily deliberate technique creates automaticity.',
+    text: 'The architecture of human habit formation demonstrates that sustainable progress stems from compounding incremental refinements rather than monumental bursts of exertion. Daily deliberate technique creates automaticity.',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 28,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+  {
+    id: 'para_03',
+    category: 'Paragraphs',
+    title: 'Deep Cognitive Immersion & Proprioception',
+    difficulty: 'Hard',
+    tags: ['#Neuroscience', '#Biomechanics', '#Cognition'],
+    focus_keys: ['p', 'r', 'o', 'p', 'r', 'i', 'o', 'c', 'e', 'p'],
+    content: 'Cortical mapping reorganizes through repetitive proprioceptive feedback loops. When motor dexterity synchronizes with tactile sensory processing, keystroke latency drops below neuromuscular thresholds.',
+    text: 'Cortical mapping reorganizes through repetitive proprioceptive feedback loops. When motor dexterity synchronizes with tactile sensory processing, keystroke latency drops below neuromuscular thresholds.',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 23,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+
+  // --- QUOTES ---
+  {
+    id: 'prac_03',
+    category: 'Quotes',
+    title: 'Perseverance & Mastery',
+    difficulty: 'Easy',
+    tags: ['#Inspiration', '#Philosophy', '#Excellence'],
+    focus_keys: ['"', '.', ',', '-', 'W', 'E'],
+    content: '"We are what we repeatedly do. Excellence, then, is not an act, but a habit." - Will Durant',
+    text: '"We are what we repeatedly do. Excellence, then, is not an act, but a habit." - Will Durant',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 18,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+  {
+    id: 'quote_02',
+    category: 'Quotes',
+    title: 'Love Your Craft',
+    difficulty: 'Medium',
+    tags: ['#Quotes', '#Inspiration', '#Craftsmanship'],
+    focus_keys: ['\'', '"', '.', ',', 'S', 'J'],
+    content: '"The only way to do great work is to love what you do. If you haven\'t found it yet, keep looking. Don\'t settle." - Steve Jobs',
+    text: '"The only way to do great work is to love what you do. If you haven\'t found it yet, keep looking. Don\'t settle." - Steve Jobs',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 26,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+  {
+    id: 'quote_03',
+    category: 'Quotes',
+    title: 'Stoic Resilience & Mindset',
+    difficulty: 'Hard',
+    tags: ['#Stoicism', '#Philosophy', '#Resilience'],
+    focus_keys: ['-', '"', '.', ',', 'M', 'A'],
+    content: '"You have power over your mind - not outside events. Realize this, and you will find strength. The impediment to action advances action." - Marcus Aurelius',
+    text: '"You have power over your mind - not outside events. Realize this, and you will find strength. The impediment to action advances action." - Marcus Aurelius',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 26,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+
+  // --- WORDS ---
+  {
+    id: 'prac_02',
+    category: 'Words',
+    title: 'High-Frequency Homerow Words',
+    difficulty: 'Easy',
+    tags: ['#Vocabulary', '#Drill', '#Beginner'],
+    focus_keys: ['t', 'h', 'e', 'a', 'n', 'd', 'o', 'f'],
+    content: 'the of and to a in is that for it as was with on be at by this from they we say her she or an will my one all would there their what',
+    text: 'the of and to a in is that for it as was with on be at by this from they we say her she or an will my one all would there their what',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 35,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+  {
+    id: 'word_02',
+    category: 'Words',
+    title: 'Technical & Computing Vocabulary',
+    difficulty: 'Medium',
+    tags: ['#TechWords', '#Vocabulary', '#MediumDrill'],
+    focus_keys: ['q', 'z', 'x', 'k', 'w'],
+    content: 'algorithm bandwidth compiler database encryption firewall gateway heuristic iteration junction kernel latency metadata network optimizer protocol quantum redundant schema telemetry',
+    text: 'algorithm bandwidth compiler database encryption firewall gateway heuristic iteration junction kernel latency metadata network optimizer protocol quantum redundant schema telemetry',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 20,
+    created_at: '2026-10-10T10:00:00.000Z'
+  },
+  {
+    id: 'word_03',
+    category: 'Words',
+    title: 'Complex Polysyllabic Sequences',
+    difficulty: 'Hard',
+    tags: ['#AdvancedWords', '#Dexterity', '#FingerShifts'],
+    focus_keys: ['q', 'u', 'x', 'z', 'j', 'p'],
+    content: 'anachronistic quintessential idiosyncrasy juxtaposed magnanimous pulchritudinous sesquipedalian ubiquitous verisimilitude zenith labyrinthine obfuscation panacea recalcitrant vicarious',
+    text: 'anachronistic quintessential idiosyncrasy juxtaposed magnanimous pulchritudinous sesquipedalian ubiquitous verisimilitude zenith labyrinthine obfuscation panacea recalcitrant vicarious',
+    publication_status: 'published',
+    is_active: true,
+    wordCount: 15,
+    created_at: '2026-10-10T10:00:00.000Z'
   }
 ];
 
@@ -276,101 +566,129 @@ class AdminService {
   // ==========================================================
 
   async fetchAllUsersLive() {
-    // 1. Try Supabase live query if configured
+    // 1. Gather all registered users from local registries first
+    const reg1 = this._get('users_registry', []);
+    const reg2 = this._get('typemaster_users_registry', []);
+    const userMap = new Map();
+
+    [...reg1, ...reg2].forEach(r => {
+      if (r && r.id && !String(r.id).startsWith('guest_')) {
+        userMap.set(String(r.id), r);
+      }
+    });
+
+    // 2. Query live Supabase users table (authoritative cloud state)
     if (supabaseService.isConfigured()) {
       try {
-        // Try profiles table first, fallback to users table
-        let res = await supabaseService._withTimeout(
-          Promise.resolve(supabaseService.supabase.from('profiles').select('*').order('created_at', { ascending: false })),
+        const { data: dbUsers, error } = await withTimeout(
+          Promise.resolve(supabaseService.supabase.from('users').select('*').order('created_at', { ascending: false })),
           4000
         );
-        if (res.error || !res.data || res.data.length === 0) {
-          res = await supabaseService._withTimeout(
-            Promise.resolve(supabaseService.supabase.from('users').select('*').order('created_at', { ascending: false })),
-            4000
-          );
-        }
-        if (!res.error && res.data && res.data.length > 0) {
-          return res.data.map(u => ({
-            id: u.id,
-            name: u.display_name || u.username || 'Typist',
-            email: u.email || `${u.username || 'user'}@typemaster.local`,
-            role: u.role || (u.email === 'admin@typemaster.com' ? 'admin' : 'user'),
-            status: u.status || 'Active',
-            joinedOn: u.created_at ? u.created_at.split('T')[0] : '2026-10-09',
-            testsTaken: u.tests_completed || 0,
-            avgWpm: Number(u.avg_wpm) || 0,
-            highestWpm: Number(u.best_wpm) || 0,
-            accuracy: Number(u.accuracy) || 0,
-            totalPracticeTimeHours: Number(((u.tests_completed || 0) * 0.05).toFixed(1)),
-            is_premium: Boolean(u.is_premium),
-            lastActive: u.updated_at ? new Date(u.updated_at).toLocaleDateString() : 'Recent'
-          }));
+
+        if (!error && Array.isArray(dbUsers)) {
+          dbUsers.forEach(u => {
+            if (u && u.id && !String(u.id).startsWith('guest_')) {
+              const existing = userMap.get(String(u.id)) || {};
+              userMap.set(String(u.id), { ...existing, ...u });
+            }
+          });
         }
       } catch (err) {
         console.warn('Live Supabase users query notice:', err);
       }
     }
 
-    // 2. Query Local Store Registry (Real registered accounts only, unify users_registry & typemaster_users_registry)
-    const reg1 = this._get('users_registry', []);
-    const reg2 = this._get('typemaster_users_registry', []);
-    const mergedMap = new Map();
-    [...reg1, ...reg2].forEach(r => {
-      if (r && r.id && !String(r.id).startsWith('guest_') && !mergedMap.has(String(r.id))) {
-        mergedMap.set(String(r.id), r);
-      }
+    const registered = Array.from(userMap.values());
+    return registered.map(r => {
+      const displayName = r.displayName || r.display_name || r.username || (r.email ? r.email.split('@')[0] : 'Typist');
+      const formattedJoined = r.created_at
+        ? new Date(r.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+        : (r.joinedOn || 'Recent');
+
+      return {
+        id: r.id,
+        name: displayName,
+        displayName: displayName,
+        display_name: displayName,
+        username: r.username || displayName,
+        email: r.email || `${r.username || 'user'}@typemaster.local`,
+        role: r.role || (r.email === 'admin@typemaster.com' ? 'admin' : 'user'),
+        status: r.status || 'Active',
+        created_at: r.created_at,
+        joinedOn: formattedJoined,
+        testsTaken: Number(r.tests_completed) || Number(r.testsTaken) || 0,
+        avgWpm: Number(r.avg_wpm) || Number(r.avgWpm) || 0,
+        highestWpm: Number(r.best_wpm) || Number(r.highestWpm) || 0,
+        accuracy: Number(r.accuracy) || 0,
+        totalPracticeTimeHours: Number(((Number(r.tests_completed || r.testsTaken) || 0) * 0.05).toFixed(1)),
+        is_premium: Boolean(r.is_premium),
+        lastActive: r.updated_at ? new Date(r.updated_at).toLocaleDateString() : 'Active'
+      };
     });
-    const registered = Array.from(mergedMap.values());
-    return registered.map(r => ({
-      id: r.id,
-      name: r.displayName || r.display_name || r.username || 'Typist',
-      email: r.email || `${r.username || 'user'}@typemaster.local`,
-      role: r.role || (r.email === 'admin@typemaster.com' ? 'admin' : 'user'),
-      status: r.status || 'Active',
-      joinedOn: r.created_at ? r.created_at.split('T')[0] : '2026-10-09',
-      testsTaken: r.tests_completed || 0,
-      avgWpm: Number(r.avg_wpm) || 0,
-      highestWpm: Number(r.best_wpm) || 0,
-      accuracy: Number(r.accuracy) || 0,
-      totalPracticeTimeHours: Number(((r.tests_completed || 0) * 0.05).toFixed(1)),
-      is_premium: Boolean(r.is_premium),
-      lastActive: 'Active'
-    }));
   }
 
   async fetchAllTestLogsLive() {
-    // 1. Try Supabase test_sessions or test_logs
+    // 1. Gather all local test attempts across all users and registries
+    const reg1 = this._get('users_registry', []);
+    const reg2 = this._get('typemaster_users_registry', []);
+    const localUserIds = new Set([...reg1, ...reg2].map(u => u?.id).filter(Boolean));
+
+    const localLogs = [];
+    localUserIds.forEach(uid => {
+      const uLogs = this._get(`test_logs_${uid}`, []);
+      if (Array.isArray(uLogs)) localLogs.push(...uLogs);
+    });
+
+    const genericLogs = this._get('typemaster_test_logs', []);
+    if (Array.isArray(genericLogs)) localLogs.push(...genericLogs);
+
+    // Scan browser localStorage keys for any user test attempts
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('test_logs_')) {
+            const raw = localStorage.getItem(key);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) localLogs.push(...parsed);
+            }
+          }
+        }
+      } catch {
+        // Ignore localStorage scan errors
+      }
+    }
+
+    // 2. Query Supabase test_logs table
+    let dbLogs = [];
     if (supabaseService.isConfigured()) {
       try {
-        let res = await supabaseService._withTimeout(
-          Promise.resolve(supabaseService.supabase.from('test_sessions').select('*').order('created_at', { ascending: false })),
+        const { data, error } = await withTimeout(
+          Promise.resolve(supabaseService.supabase.from('test_logs').select('*').order('created_at', { ascending: false }).limit(500)),
           4000
         );
-        if (res.error || !res.data || res.data.length === 0) {
-          res = await supabaseService._withTimeout(
-            Promise.resolve(supabaseService.supabase.from('test_logs').select('*').order('created_at', { ascending: false })),
-            4000
-          );
-        }
-        if (!res.error && res.data) {
-          return res.data;
+        if (!error && Array.isArray(data)) {
+          dbLogs = data;
         }
       } catch (err) {
         console.warn('Live Supabase test logs notice:', err);
       }
     }
 
-    // 2. Gather from local storage across registered users
-    const reg1 = this._get('users_registry', []);
-    const reg2 = this._get('typemaster_users_registry', []);
-    const userIds = new Set([...reg1, ...reg2].map(u => u?.id).filter(Boolean));
-    let allLogs = [];
-    userIds.forEach(uid => {
-      const uLogs = this._get(`test_logs_${uid}`, []);
-      allLogs = allLogs.concat(uLogs);
+    // 3. Merge both sources and deduplicate by unique attempt ID
+    const mergedMap = new Map();
+    [...dbLogs, ...localLogs].forEach(item => {
+      if (!item) return;
+      const key = item.id ? String(item.id) : `${item.user_id}_${item.wpm}_${item.created_at || item.date}`;
+      if (!mergedMap.has(key)) {
+        mergedMap.set(key, item);
+      }
     });
-    return allLogs;
+
+    const combinedList = Array.from(mergedMap.values());
+    combinedList.sort((a, b) => new Date(b.created_at || b.date || 0) - new Date(a.created_at || a.date || 0));
+    return combinedList;
   }
 
   // Get live aggregated dashboard metrics from real database rows
@@ -380,79 +698,212 @@ class AdminService {
 
     const isFiltered = timeframe && timeframe !== 'All Time' && timeframe !== 'All';
     const users = isFiltered
-      ? allUsers.filter(u => isDateInPeriod(u.joinedOn || u.created_at, timeframe))
+      ? allUsers.filter(u => isDateInPeriod(u.created_at || u.joinedOn, timeframe))
       : allUsers;
     const testLogs = isFiltered
       ? allTestLogs.filter(l => isDateInPeriod(l.created_at || l.date, timeframe))
       : allTestLogs;
 
-    const totalUsers = isFiltered ? users.length : allUsers.length;
+    // Filter strictly for registered accounts (exclude temporary anonymous guest IDs)
+    const registeredUsers = allUsers.filter(u => u && u.id && !String(u.id).startsWith('guest_'));
+    // Total Registered Users reflects real-time total registered typists from the beginning
+    const totalUsers = registeredUsers.length;
 
-    // Strategy A: Strict Registered User Activity
-    // Filter strictly for registered user IDs present in the users/profiles table within the 30-day window
-    // (JOIN users u ON u.id = tl.user_id WHERE tl.created_at >= NOW() - INTERVAL '30 days')
-    const registeredUserIds = new Set(
-      allUsers
-        .map(u => String(u.id))
-        .filter(id => id && !id.startsWith('guest_'))
-    );
-
+    // Active Users (30d): registered typists who took tests in the last 30 days OR have completed tests recorded
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-
-    const activeRegisteredLogs = allTestLogs.filter(l => {
-      if (!l || !l.user_id) return false;
+    const activeUserIds = new Set();
+    allTestLogs.forEach(l => {
+      if (!l || !l.user_id) return;
       const uid = String(l.user_id);
-      if (uid.startsWith('guest_') || !registeredUserIds.has(uid)) return false;
+      if (uid.startsWith('guest_')) return;
       const logDate = new Date(l.created_at || l.date || 0);
-      if (isNaN(logDate.getTime())) return false;
-      if (isFiltered) {
-        return isDateInPeriod(l.created_at || l.date, timeframe);
+      if (isNaN(logDate.getTime()) || logDate >= thirtyDaysAgo) {
+        activeUserIds.add(uid);
       }
-      return logDate >= thirtyDaysAgo;
     });
-
-    const distinctActiveUserIds = new Set(activeRegisteredLogs.map(l => String(l.user_id)));
-    // Mathematically guaranteed: activeUsers <= totalUsers
-    const activeUsers = Math.min(totalUsers, distinctActiveUserIds.size);
+    registeredUsers.forEach(u => {
+      if (Number(u.testsTaken) > 0 || Number(u.tests_completed) > 0) {
+        activeUserIds.add(String(u.id));
+      }
+    });
+    const activeUsers = Math.min(totalUsers, Math.max(activeUserIds.size, registeredUsers.length > 0 ? 1 : 0));
     const testsCompleted = testLogs.length;
 
-    // Platform Avg WPM
-    const validWpms = testLogs.map(l => Number(l.wpm) || 0).filter(w => w > 0);
+    // Platform Avg WPM (Valid non-zero attempts)
+    const validWpms = testLogs
+      .filter(l => l && l.is_valid !== false && Number(l.wpm) > 0)
+      .map(l => Number(l.wpm));
     const avgWpm = validWpms.length > 0
       ? Math.round(validWpms.reduce((a, b) => a + b, 0) / validWpms.length)
-      : (users.length > 0 ? Math.round(users.reduce((a, u) => a + (u.avgWpm || 0), 0) / users.length) : 0);
+      : (registeredUsers.length > 0 ? Math.round(registeredUsers.reduce((a, u) => a + (u.avgWpm || u.highestWpm || 0), 0) / registeredUsers.length) : 0);
 
     // Achievements unlocked across system
     const badges = this.getBadges();
     const achievementsEarned = badges.reduce((acc, b) => acc + (b.unlockedCount || 0), 0);
 
-    // Recent registered users (real database rows)
-    const recentUsers = [...users].slice(0, 5);
+    // ==========================================================
+    // SECTION 1: RECENT USERS (Newest registered accounts first)
+    // ==========================================================
+    const sortedRecentUsers = [...registeredUsers].sort((a, b) => {
+      const timeA = new Date(a.created_at || a.joinedOn || 0).getTime();
+      const timeB = new Date(b.created_at || b.joinedOn || 0).getTime();
+      return timeB - timeA;
+    });
 
-    // Top Performers (real database rows sorted by speed)
-    const topPerformers = [...users]
-      .filter(u => u.highestWpm > 0 || u.avgWpm > 0)
-      .sort((a, b) => (b.highestWpm || b.avgWpm) - (a.highestWpm || a.avgWpm))
-      .slice(0, 5)
-      .map((u, i) => ({
-        rank: i + 1,
-        name: u.name,
-        avgWpm: u.highestWpm || u.avgWpm,
-        accuracy: u.accuracy || 98,
-        tests: u.testsTaken || 1
-      }));
+    const recentUsers = sortedRecentUsers.slice(0, 5).map(u => ({
+      ...u,
+      joinedOn: u.created_at
+        ? new Date(u.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+        : (u.joinedOn || 'Recent'),
+      user: u
+    }));
 
-    // Latest Test Attempts (real database rows)
-    const latestTestAttempts = testLogs.slice(0, 5).map((l, i) => {
-      const matchedUser = users.find(u => u.id === l.user_id);
+    // ==========================================================
+    // SECTION 2: TOP PERFORMING USERS (Matches User Portal Leaderboard)
+    // ==========================================================
+    // Group all valid, eligible test logs by user_id
+    const userValidLogsMap = new Map();
+    allTestLogs.forEach(l => {
+      if (!l || !l.user_id) return;
+      const uid = String(l.user_id);
+      if (uid.startsWith('guest_')) return;
+      if (l.is_valid === false) return; // Exclude flagged/invalid test results
+      const wpmVal = Number(l.wpm) || 0;
+      if (wpmVal <= 0) return; // Exclude incomplete 0 WPM tests
+
+      if (!userValidLogsMap.has(uid)) {
+        userValidLogsMap.set(uid, []);
+      }
+      userValidLogsMap.get(uid).push(l);
+    });
+
+    const candidatePerformers = registeredUsers.map(u => {
+      const uid = String(u.id);
+      const logs = userValidLogsMap.get(uid) || [];
+      let testsCount = logs.length;
+      let userBestWpm = 0;
+      let userAvgWpm = 0;
+      let userAvgAccuracy = 0;
+
+      if (testsCount > 0) {
+        userBestWpm = Math.max(...logs.map(l => Number(l.wpm) || 0));
+        userAvgWpm = Math.round(logs.reduce((sum, l) => sum + (Number(l.wpm) || 0), 0) / testsCount);
+        userAvgAccuracy = Number((logs.reduce((sum, l) => sum + (Number(l.accuracy) || 0), 0) / testsCount).toFixed(1));
+      } else if (u.testsTaken > 0 || u.highestWpm > 0 || u.avgWpm > 0) {
+        // Fallback to persisted stats on user row
+        testsCount = u.testsTaken || 0;
+        userBestWpm = Math.round(u.highestWpm || u.best_wpm || u.avgWpm || 0);
+        userAvgWpm = Math.round(u.avgWpm || userBestWpm);
+        userAvgAccuracy = Number(Number(u.accuracy || 0).toFixed(1));
+      }
+
       return {
-        id: i + 1,
-        user: l.userName || matchedUser?.name || 'Registered Typist',
+        id: u.id,
+        name: u.name || u.displayName || u.username || 'Typist',
+        email: u.email,
+        wpm: userBestWpm,
+        highestWpm: userBestWpm,
+        avgWpm: userAvgWpm,
+        accuracy: userAvgAccuracy,
+        tests: testsCount,
+        testsCompleted: testsCount,
+        user: u
+      };
+    });
+
+    // Only include users who have completed at least 1 valid test
+    const eligiblePerformers = candidatePerformers.filter(p => p.tests > 0 && p.wpm > 0);
+
+    // Strictly match Leaderboard ranking: best WPM (desc), accuracy (desc), tests completed (desc)
+    eligiblePerformers.sort((a, b) => {
+      if (b.wpm !== a.wpm) return b.wpm - a.wpm;
+      if (b.accuracy !== a.accuracy) return b.accuracy - a.accuracy;
+      return b.tests - a.tests;
+    });
+
+    const topPerformers = eligiblePerformers.slice(0, 5).map((p, idx) => ({
+      ...p,
+      rank: idx + 1
+    }));
+
+    // ==========================================================
+    // SECTION 3: LATEST TEST ATTEMPTS (Newest telemetry submissions)
+    // ==========================================================
+    const sortedTestLogs = [...allTestLogs]
+      .filter(l => l && (l.id || l.user_id))
+      .sort((a, b) => new Date(b.created_at || b.date || 0) - new Date(a.created_at || a.date || 0));
+
+    // Deduplicate attempts by unique ID
+    const seenAttemptIds = new Set();
+    const uniqueAttempts = [];
+    for (const l of sortedTestLogs) {
+      const idStr = String(l.id || `${l.user_id}_${l.wpm}_${l.created_at || l.date}`);
+      if (!seenAttemptIds.has(idStr)) {
+        seenAttemptIds.add(idStr);
+        uniqueAttempts.push(l);
+      }
+    }
+
+    const latestTestAttempts = uniqueAttempts.slice(0, 10).map((l, i) => {
+      const rawUserId = l.user_id || l.userId;
+      const matchedUser = allUsers.find(u =>
+        (rawUserId && String(u.id) === String(rawUserId)) ||
+        (u.email && l.userEmail && u.email.toLowerCase() === l.userEmail.toLowerCase()) ||
+        (u.username && l.userName && u.username.toLowerCase() === l.userName.toLowerCase())
+      );
+
+      let durationStr = '60s';
+      if (typeof l.duration === 'number') {
+        if (l.duration >= 60) {
+          durationStr = `${Math.round(l.duration / 60)} min`;
+        } else {
+          durationStr = `${l.duration}s`;
+        }
+      } else if (l.duration) {
+        durationStr = String(l.duration);
+      }
+
+      let attemptStatus = 'Completed';
+      if (l.is_valid === false) {
+        attemptStatus = 'Flagged';
+      } else if (l.result_badge) {
+        attemptStatus = l.result_badge;
+      } else if (l.status) {
+        attemptStatus = l.status;
+      }
+
+      const rawDate = l.created_at || l.date || l.timestamp;
+      const formattedDate = rawDate
+        ? new Date(rawDate).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+        : 'Just now';
+
+      let resolvedUserName = l.userName || l.user || matchedUser?.displayName || matchedUser?.display_name || matchedUser?.username || matchedUser?.name;
+      if (!resolvedUserName || resolvedUserName === 'Typist' || resolvedUserName === 'Registered Typist') {
+        if (rawUserId) {
+          const directUser = this.getUserById(rawUserId);
+          if (directUser) resolvedUserName = directUser.displayName || directUser.name || directUser.username;
+        }
+      }
+      if (!resolvedUserName) {
+        resolvedUserName = (rawUserId && String(rawUserId).startsWith('guest_')) ? 'Guest Typist' : 'Registered Typist';
+      }
+
+      return {
+        id: l.id || `att_${i + 1}`,
+        user_id: l.user_id,
+        user: resolvedUserName,
+        userName: resolvedUserName,
         type: l.category || 'General',
-        wpm: l.wpm || 0,
-        accuracy: `${l.accuracy || 0}%`,
-        time: l.duration ? (typeof l.duration === 'number' ? `${Math.round(l.duration / 60)} min` : l.duration) : '1 min',
-        date: l.created_at ? new Date(l.created_at).toLocaleString() : (l.date || 'Today')
+        wpm: Number(l.wpm) || 0,
+        accuracy: `${Number(l.accuracy) || 0}%`,
+        errors: Number(l.errors) || 0,
+        time: durationStr,
+        rawDuration: l.duration,
+        date: formattedDate,
+        rawDate: rawDate,
+        status: attemptStatus,
+        is_valid: l.is_valid !== false,
+        userObj: matchedUser
       };
     });
 
@@ -466,15 +917,15 @@ class AdminService {
       { label: '> 100', min: 100, max: 999, count: 0, color: '#EC4899' }
     ];
 
-    if (validWpms.length > 0) {
-      validWpms.forEach(w => {
+    const allWpms = allTestLogs.map(l => Number(l.wpm) || 0).filter(w => w > 0);
+    if (allWpms.length > 0) {
+      allWpms.forEach(w => {
         const found = brackets.find(b => w >= b.min && (b.max === 999 ? w >= b.min : w < b.max));
         if (found) found.count++;
       });
     } else {
-      // If fresh database with user profiles
-      users.forEach(u => {
-        const w = u.avgWpm || u.highestWpm || 0;
+      registeredUsers.forEach(u => {
+        const w = u.highestWpm || u.avgWpm || 0;
         const found = brackets.find(b => w >= b.min && (b.max === 999 ? w >= b.min : w < b.max));
         if (found) found.count++;
       });
@@ -490,7 +941,7 @@ class AdminService {
 
     // Dynamic Category percentage from real logs
     const catCounts = { Words: 0, Sentences: 0, Paragraphs: 0, 'Timed Test': 0, 'Custom Test': 0 };
-    testLogs.forEach(l => {
+    allTestLogs.forEach(l => {
       const c = l.category || 'Paragraphs';
       if (c.toLowerCase().includes('word')) catCounts.Words++;
       else if (c.toLowerCase().includes('sentence')) catCounts.Sentences++;
@@ -525,7 +976,7 @@ class AdminService {
       const dayLogs = allTestLogs.filter(l => {
         if (!l || !l.user_id) return false;
         const uid = String(l.user_id);
-        if (uid.startsWith('guest_') || !registeredUserIds.has(uid)) return false;
+        if (uid.startsWith('guest_')) return false;
         const dStr = (l.created_at || l.date || '').substring(0, 10);
         return dStr === dl.isoDate;
       });
@@ -534,7 +985,7 @@ class AdminService {
     });
 
     const newUsersPoints = dayLabels.map(dl => {
-      const usersUpToDay = allUsers.filter(u => {
+      const usersUpToDay = registeredUsers.filter(u => {
         const dStr = (u.joinedOn || u.created_at || '').substring(0, 10);
         return dStr && dStr <= dl.isoDate;
       });
@@ -544,7 +995,7 @@ class AdminService {
     return {
       totalUsers,
       activeUsers,
-      testsCompleted,
+      testsCompleted: allTestLogs.length,
       avgWpm,
       achievementsEarned,
       activityDays,
@@ -967,6 +1418,39 @@ class AdminService {
     return true;
   }
 
+  exportScheduledTestResultsToExcel(testTitle, attempts = [], format = 'xlsx') {
+    const cleanTitle = (testTitle || 'Scheduled_Test').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const dateStr = new Date().toISOString().split('T')[0];
+    const fileName = `TypeMaster_Results_${cleanTitle}_${dateStr}.${format}`;
+    const rows = (attempts || []).map((a, idx) => ({
+      'Rank': a.rank || idx + 1,
+      'User Name': a.user_name || 'Typist',
+      'User Email': a.user_email || 'N/A',
+      'Test Title': a.scheduled_test_title || testTitle || '',
+      'Speed (WPM)': a.wpm,
+      'Raw WPM': a.raw_wpm || a.wpm,
+      'Accuracy (%)': a.accuracy,
+      'Errors': a.errors || 0,
+      'Correct Characters': a.correct_characters || a.characters || 0,
+      'Total Characters': a.characters || 0,
+      'Duration (sec)': a.duration,
+      'Final Score': a.score ?? Math.round((a.wpm || 0) * ((a.accuracy || 100) / 100)),
+      'Status': a.status || 'completed',
+      'Attempt Date': a.created_at ? new Date(a.created_at).toLocaleString() : ''
+    }));
+
+    if (format === 'csv') {
+      exportDataToCsv(rows, fileName);
+    } else {
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, ws, 'Results');
+      exportWorkbookToExcel(wb, fileName);
+    }
+    this.logAudit('Data Exported', 'Scheduled Test Results', `Exported ${attempts.length} attempts for "${testTitle}" to ${fileName}`);
+    return true;
+  }
+
   // ==========================================================
   // TYPING TESTS CRUD
   // ==========================================================
@@ -1033,7 +1517,20 @@ class AdminService {
   // PRACTICE CONTENT
   // ==========================================================
   getPracticeContent() {
-    return this._get('admin_practice_content', INITIAL_PRACTICE_ITEMS);
+    const stored = this._get('admin_practice_content', INITIAL_PRACTICE_ITEMS);
+    // Ensure all predefined domain items (including Mathematics Easy, Medium, Hard) exist in the pool
+    const itemsMap = new Map();
+    INITIAL_PRACTICE_ITEMS.forEach(init => itemsMap.set(init.id, init));
+    (Array.isArray(stored) ? stored : []).forEach(item => {
+      if (item && item.id) {
+        itemsMap.set(item.id, { ...itemsMap.get(item.id), ...item });
+      }
+    });
+    const merged = Array.from(itemsMap.values());
+    if (!stored || stored.length !== merged.length) {
+      this._set('admin_practice_content', merged);
+    }
+    return merged;
   }
 
   createPracticeContent(itemData) {
@@ -1156,20 +1653,57 @@ class AdminService {
 
   getLeaderboardRankings(timeframe = 'All-Time') {
     const users = this.getUsers();
-    return users
-      .map((u, idx) => ({
-        rank: idx + 1,
-        user: u.name,
-        email: u.email,
-        wpm: u.avgWpm || u.highestWpm || 0,
-        accuracy: u.accuracy || 98,
-        testsCompleted: u.testsTaken || 0,
-        tier: (u.highestWpm || 0) >= 90 ? 'Master' : (u.highestWpm || 0) >= 70 ? 'Diamond' : 'Gold',
-        status: u.status
-      }))
-      .sort((a, b) => b.wpm - a.wpm)
-      .map((item, idx) => ({ ...item, rank: idx + 1 }));
+    const computedLeaderboard = users.map((u) => {
+      const testsCompleted = u.testsTaken || 0;
+      if (testsCompleted === 0) {
+        return {
+          id: u.id,
+          user: u.name || 'Typist',
+          name: u.name || 'Typist',
+          email: u.email || 'N/A',
+          wpm: 0,
+          accuracy: 0, // Set accuracy to 0% (not default 98%) when no tests taken
+          testsCompleted: 0,
+          tier: 'Unranked',
+          status: u.status || 'Active'
+        };
+      }
+
+      const wpm = u.highestWpm || u.avgWpm || 0;
+      let tier = 'Bronze';
+      if (wpm >= 80) tier = 'Master';
+      else if (wpm >= 50) tier = 'Gold';
+      else if (wpm >= 30) tier = 'Silver';
+
+      return {
+        id: u.id,
+        user: u.name || 'Typist',
+        name: u.name || 'Typist',
+        email: u.email || 'N/A',
+        wpm,
+        accuracy: typeof u.accuracy === 'number' ? u.accuracy : parseFloat(u.accuracy || 0),
+        testsCompleted,
+        tier,
+        status: u.status || 'Active'
+      };
+    });
+
+    // Sort: Active users first, then by WPM (desc), then Accuracy (desc), then Tests (desc)
+    const sortedLeaderboard = computedLeaderboard.sort((a, b) => {
+      if (a.testsCompleted === 0 && b.testsCompleted > 0) return 1;
+      if (a.testsCompleted > 0 && b.testsCompleted === 0) return -1;
+      if (b.wpm !== a.wpm) return b.wpm - a.wpm;
+      if (b.accuracy !== a.accuracy) return b.accuracy - a.accuracy;
+      return b.testsCompleted - a.testsCompleted;
+    });
+
+    return sortedLeaderboard.map((item, idx) => ({ ...item, rank: idx + 1 }));
   }
+
+  async fetchGlobalLeaderboard(timeframe = 'All-Time') {
+    return supabaseService.fetchGlobalLeaderboard(timeframe);
+  }
+
 
   _isSampleFeedback(fb) {
     if (!fb) return true;

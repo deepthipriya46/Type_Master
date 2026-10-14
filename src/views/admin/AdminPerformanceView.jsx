@@ -18,10 +18,37 @@ import { adminService, isDateInPeriod } from '../../services/adminService';
 import { supabaseService } from '../../services/supabaseService';
 
 export default function AdminPerformanceView({ initialUser, dateRange = 'All Time', onDateRangeChange }) {
-  const users = adminService.getUsers();
-  const [selectedUserId, setSelectedUserId] = useState(() => {
-    return initialUser?.id || (users[0] ? users[0].id : '');
+  const [usersList, setUsersList] = useState(() => {
+    const local = adminService.getUsers() || [];
+    if (initialUser && initialUser.id && !local.some(u => u && String(u.id) === String(initialUser.id))) {
+      return [initialUser, ...local];
+    }
+    return local;
   });
+
+  const [selectedUserId, setSelectedUserId] = useState(() => {
+    return initialUser?.id || (usersList[0] ? usersList[0].id : '');
+  });
+
+  useEffect(() => {
+    adminService.fetchAllUsersLive().then(live => {
+      if (live && live.length > 0) {
+        setUsersList(prev => {
+          const map = new Map();
+          if (initialUser) map.set(String(initialUser.id), initialUser);
+          live.forEach(u => map.set(String(u.id), u));
+          prev.forEach(u => { if (!map.has(String(u.id))) map.set(String(u.id), u); });
+          return Array.from(map.values());
+        });
+      }
+    });
+  }, [initialUser]);
+
+  useEffect(() => {
+    if (initialUser?.id) {
+      setSelectedUserId(initialUser.id);
+    }
+  }, [initialUser?.id]);
 
   const [activeTab, setActiveTab] = useState('overview'); // 'overview', 'history', 'practice', 'achievements'
   const [timeRange, setTimeRange] = useState(dateRange || 'All Time');
@@ -34,7 +61,7 @@ export default function AdminPerformanceView({ initialUser, dateRange = 'All Tim
     }
   }, [dateRange]);
 
-  const currentUser = users.find((u) => u.id === selectedUserId) || users[0] || {
+  const currentUser = usersList.find((u) => String(u.id) === String(selectedUserId)) || usersList[0] || {
     id: 'empty',
     name: 'No Users Registered',
     email: '',
@@ -203,7 +230,7 @@ export default function AdminPerformanceView({ initialUser, dateRange = 'All Tim
                 boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
               }}
             >
-              {users.map((u) => (
+              {usersList.map((u) => (
                 <option key={u.id} value={u.id}>
                   {u.name} ({u.avgWpm} WPM)
                 </option>
@@ -295,7 +322,7 @@ export default function AdminPerformanceView({ initialUser, dateRange = 'All Tim
               boxShadow: '0 4px 12px rgba(79, 70, 229, 0.3)'
             }}
           >
-            {currentUser.name.split(' ').map((n) => n[0]).join('').substring(0, 2).toUpperCase()}
+            {(currentUser?.name || 'User').split(' ').filter(Boolean).map((n) => n[0]).join('').substring(0, 2).toUpperCase()}
           </div>
           <div>
             <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#0F172A' }}>
@@ -428,7 +455,8 @@ export default function AdminPerformanceView({ initialUser, dateRange = 'All Tim
 
                 {/* Dots */}
                 {speedHistory.map((item, idx) => {
-                  const x = (idx / (speedHistory.length - 1)) * (chartW - 40) + 25;
+                  const divisor = Math.max(1, speedHistory.length - 1);
+                  const x = (idx / divisor) * (chartW - 40) + 25;
                   const y = chartH - (item.wpm / 150) * (chartH - 30) - 15;
                   return (
                     <circle key={idx} cx={x} cy={y} r="3.5" fill="#4F46E5" stroke="#FFFFFF" strokeWidth="1.5" />
@@ -495,7 +523,8 @@ export default function AdminPerformanceView({ initialUser, dateRange = 'All Tim
 
                 {/* Dots */}
                 {accuracyHistory.map((item, idx) => {
-                  const x = (idx / (accuracyHistory.length - 1)) * (chartW - 40) + 25;
+                  const divisor = Math.max(1, accuracyHistory.length - 1);
+                  const x = (idx / divisor) * (chartW - 40) + 25;
                   const y = chartH - (item.accuracy / 100) * (chartH - 30) - 15;
                   return (
                     <circle key={idx} cx={x} cy={y} r="3.5" fill="#10B981" stroke="#FFFFFF" strokeWidth="1.5" />

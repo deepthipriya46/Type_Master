@@ -798,6 +798,7 @@ class SupabaseService {
 
   // --- STORAGE HELPERS ---
   _getLocal(key, fallback) {
+    if (typeof localStorage === 'undefined') return fallback;
     try {
       const data = localStorage.getItem(`typemaster_${key}`);
       return data ? JSON.parse(data) : fallback;
@@ -807,6 +808,7 @@ class SupabaseService {
   }
 
   _setLocal(key, val) {
+    if (typeof localStorage === 'undefined') return;
     try {
       localStorage.setItem(`typemaster_${key}`, JSON.stringify(val));
     } catch (e) {
@@ -1475,10 +1477,27 @@ class SupabaseService {
   }
 
   async getGeminiConfig() {
-    // Priority order:
-    // 1. Admin Configured Key from Supabase / system_config / localStorage
+    // 1. First check server-side active configuration endpoint
+    try {
+      const statusRes = await fetch('/api/typing/gemini-status');
+      if (statusRes.ok) {
+        const data = await statusRes.json();
+        if (data.isConfigured) {
+          return {
+            apiKey: data.maskedKey || '••••••••••••••••',
+            maskedKey: data.maskedKey,
+            model: data.model || 'gemini-3.5-flash',
+            isConfigured: true
+          };
+        }
+      }
+    } catch {
+      // Fallback to local / database storage
+    }
+
+    // 2. Admin Configured Key from Supabase / system_config / localStorage
     let apiKey = '';
-    let model = 'gemini-2.5-flash';
+    let model = 'gemini-3.5-flash';
 
     try {
       const storedConfig = await this.getSystemConfig('gemini_config', null);
@@ -1502,22 +1521,34 @@ class SupabaseService {
       apiKey = localStorage.getItem('gemini_api_key') || localStorage.getItem('VITE_GEMINI_API_KEY') || '';
     }
 
-    // 2. Frontend environment variable fallback
     if (!apiKey && typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) {
       apiKey = import.meta.env.VITE_GEMINI_API_KEY;
     }
 
     return {
       apiKey: apiKey || '',
-      model: model || 'gemini-2.5-flash',
+      maskedKey: apiKey ? `••••••••••••${apiKey.slice(-4)}` : '',
+      model: model || 'gemini-3.5-flash',
       isConfigured: Boolean(apiKey && apiKey.length > 8)
     };
   }
 
-  async saveGeminiConfig({ apiKey, model = 'gemini-2.5-flash' }) {
+  async saveGeminiConfig({ apiKey, model = 'gemini-3.5-flash' }) {
     const cleanKey = (apiKey || '').trim();
-    const cleanModel = model || 'gemini-2.5-flash';
+    const cleanModel = model || 'gemini-3.5-flash';
 
+    // 1. Update backend server runtime config and .env
+    try {
+      await fetch('/api/admin/gemini-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: cleanKey, model: cleanModel })
+      });
+    } catch (err) {
+      console.warn('Backend server config sync note:', err);
+    }
+
+    // 2. Persist to Supabase / local storage
     const configObj = {
       apiKey: cleanKey,
       model: cleanModel,
@@ -1535,14 +1566,41 @@ class SupabaseService {
     return { success: true, config: configObj };
   }
 
-  async testGeminiConnection(apiKey, model = 'gemini-2.5-flash') {
+  async testGeminiConnection(apiKey, model = 'gemini-3.5-flash') {
     const key = (apiKey || '').trim();
+
+    // 1. Attempt server-side test endpoint first
+    try {
+      const serverRes = await fetch('/api/typing/test-gemini', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: key, model })
+      });
+      if (serverRes.ok) {
+        const serverData = await serverRes.json();
+        if (serverData.success) {
+          return {
+            success: true,
+            model: serverData.model || model,
+            message: serverData.message || `Connection Successful! API key is valid and connected to ${model}.`
+          };
+        } else {
+          return {
+            success: false,
+            message: serverData.message || 'Failed to connect to Google Gemini API.'
+          };
+        }
+      }
+    } catch {
+      // Fall through to direct test
+    }
+
     if (!key) {
       return { success: false, message: 'API key is required to test connection.' };
     }
 
-    // Try direct Gemini API request with lightweight test prompt
-    const candidateModels = [model, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+    // 2. Direct Gemini API test with current working candidate models
+    const candidateModels = [model || 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.8-flash'];
     let lastError = null;
 
     for (const testModel of candidateModels) {
@@ -1554,7 +1612,7 @@ class SupabaseService {
           body: JSON.stringify({
             contents: [
               {
-                parts: [{ text: 'Respond with the word "Connected" only.' }]
+                parts: [{ text: 'Respond with "Connected".' }]
               }
             ],
             generationConfig: {
@@ -1565,7 +1623,6 @@ class SupabaseService {
         });
 
         if (response.ok) {
-          const data = await response.json();
           return {
             success: true,
             model: testModel,
@@ -1575,7 +1632,6 @@ class SupabaseService {
           const errData = await response.json().catch(() => ({}));
           const errMsg = errData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
           lastError = errMsg;
-          // If invalid API key (400 / API_KEY_INVALID), return immediately
           if (response.status === 400 && (errMsg.toLowerCase().includes('key') || errMsg.toLowerCase().includes('api_key'))) {
             return {
               success: false,
@@ -1586,23 +1642,6 @@ class SupabaseService {
       } catch (err) {
         lastError = err.message || 'Network timeout';
       }
-    }
-
-    // Also attempt server-side test endpoint as backup
-    try {
-      const serverRes = await fetch('/api/typing/test-gemini', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: key, model })
-      });
-      if (serverRes.ok) {
-        const serverData = await serverRes.json();
-        if (serverData.success) {
-          return { success: true, message: serverData.message || 'Connection Successful! API key is valid.' };
-        }
-      }
-    } catch {
-      // Ignore
     }
 
     return {
@@ -2317,6 +2356,7 @@ class SupabaseService {
       const scheduledTestId = payload.scheduled_test_id || payload.scheduledTestId;
       this.recordScheduledTestAttempt({
         scheduledTestId,
+        scheduledTestTitle: payload.scheduled_test_title || payload.scheduledTestTitle || null,
         userId,
         userName: updatedUser.displayName || updatedUser.username,
         userEmail: updatedUser.email,
@@ -2325,7 +2365,19 @@ class SupabaseService {
         accuracy: newLog.accuracy,
         duration,
         errors: newLog.errors,
-        characters: newLog.characters
+        characters: newLog.characters,
+        correctCharacters: newLog.correct_characters,
+        wrongCharacters: newLog.wrong_characters,
+        missedCharacters: newLog.missed_characters,
+        extraCharacters: newLog.extra_characters,
+        score: Math.round(newLog.wpm * (newLog.accuracy / 100)),
+        status: payload.status || 'completed',
+        promptText: newLog.prompt_text,
+        typedInput: newLog.typed_input,
+        mistakeDetails: newLog.mistake_details,
+        startedAt: payload.started_at || payload.startedAt || null,
+        completedAt: newLog.created_at,
+        attemptId: newLog.id
       }).catch(e => console.warn('Record scheduled attempt note:', e));
     }
 
@@ -2665,35 +2717,178 @@ class SupabaseService {
   // ==========================================================
   // REAL-TIME LEADERBOARD
   // ==========================================================
-  async fetchLeaderboard(filter = 'weekly') {
-    // 1. Supabase live fetch
-    if (this.isConfigured()) {
-      try {
-        const { data: users, error } = await this.supabase
-          .from('users')
-          .select('id, username, avatar_url, best_wpm, accuracy')
-          .order('best_wpm', { ascending: false })
-          .limit(50);
+  // ==========================================================
+  // REAL-TIME LEADERBOARD & GLOBAL RANKING LOGIC
+  // ==========================================================
+  async fetchGlobalLeaderboard(timeframe = 'All-Time') {
+    let leaderboardData = null;
+    let fetchError = null;
 
-        if (!error && users && users.length > 0) {
-          return users.map(u => ({
-            userId: u.id,
-            name: u.username,
-            wpm: u.best_wpm || 0,
-            accuracy: u.accuracy || 0,
-            streak: 0,
-            tier: (u.best_wpm || 0) >= 100 ? 'Master' : (u.best_wpm || 0) >= 75 ? 'Diamond' : (u.best_wpm || 0) >= 50 ? 'Gold' : 'Apprentice',
-            avatar: u.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(u.username)}`
-          }));
+    if (this.isConfigured() && this.supabase) {
+      try {
+        // Query users table and joined test_logs
+        const res = await this.supabase
+          .from('users')
+          .select(`
+            id,
+            full_name,
+            email,
+            status,
+            test_logs (
+              wpm,
+              accuracy,
+              created_at
+            )
+          `);
+
+        if (res.error) {
+          // Fallback if schema uses username instead of full_name or status is omitted
+          const fallbackRes = await this.supabase
+            .from('users')
+            .select(`
+              id,
+              username,
+              email,
+              avatar_url,
+              test_logs (
+                wpm,
+                accuracy,
+                created_at
+              )
+            `);
+          if (!fallbackRes.error && fallbackRes.data) {
+            leaderboardData = fallbackRes.data;
+          } else {
+            fetchError = res.error;
+          }
+        } else {
+          leaderboardData = res.data;
         }
       } catch (err) {
-        console.warn('Supabase leaderboard fetch fallback:', err);
+        console.warn('Supabase fetchGlobalLeaderboard error:', err);
+        fetchError = err;
       }
     }
 
-    // 2. Local leaderboard
-    const list = this._getLocal('leaderboard', []);
-    return list;
+    // Fallback to local accounts and test logs if Supabase fails or is offline
+    if (!leaderboardData || leaderboardData.length === 0) {
+      const accounts = this._getLocal('users_registry', []);
+      const localAdmins = this._getLocal('admin_users', []);
+      const combined = [...accounts, ...localAdmins];
+      const seen = new Set();
+      leaderboardData = [];
+      for (const acc of combined) {
+        if (!acc || !acc.id || seen.has(acc.id) || String(acc.id).startsWith('guest_')) continue;
+        seen.add(acc.id);
+        const logs = this._getLocal(`test_logs_${acc.id}`, []);
+        leaderboardData.push({
+          id: acc.id,
+          full_name: acc.full_name || acc.displayName || acc.username || 'Typist',
+          username: acc.username,
+          email: acc.email,
+          status: acc.status || 'Active',
+          avatar_url: acc.avatar_url,
+          test_logs: logs
+        });
+      }
+    }
+
+    // Filter logs by timeframe if specified
+    const now = Date.now();
+    const filterLogs = (logs) => {
+      if (!timeframe || timeframe.toLowerCase() === 'all-time' || timeframe.toLowerCase() === 'all') return logs;
+      const days = timeframe.toLowerCase() === 'today' ? 1 : timeframe.toLowerCase() === 'weekly' ? 7 : 30;
+      const cutoff = now - days * 24 * 60 * 60 * 1000;
+      return logs.filter(l => {
+        const t = l.created_at ? new Date(l.created_at).getTime() : 0;
+        return t >= cutoff;
+      });
+    };
+
+    // Filter to registered users (exclude anonymous guests)
+    const registeredUsers = (leaderboardData || []).filter(u => u && !String(u.id).startsWith('guest_'));
+
+    // Calculate user performance metrics dynamically
+    const computedLeaderboard = registeredUsers.map((user) => {
+      // Also merge any latest local test logs for user if available
+      const localLogs = this._getLocal ? this._getLocal(`test_logs_${user.id}`, []) : [];
+      const remoteLogs = user.test_logs || [];
+      const combinedLogs = [...remoteLogs];
+      for (const ll of localLogs) {
+        if (ll && ll.wpm && !combinedLogs.some(rl => rl.created_at === ll.created_at && rl.wpm === ll.wpm)) {
+          combinedLogs.push(ll);
+        }
+      }
+
+      const logs = filterLogs(combinedLogs);
+      const testsCompleted = logs.length;
+
+      if (testsCompleted === 0) {
+        return {
+          id: user.id,
+          userId: user.id,
+          name: user.full_name || user.displayName || user.username || 'Typist',
+          user: user.full_name || user.displayName || user.username || 'Typist',
+          email: user.email || 'N/A',
+          wpm: 0,
+          accuracy: 0, // Set accuracy to 0% (not default 98%) when no tests taken
+          testsCompleted: 0,
+          streak: 0,
+          tier: 'Unranked',
+          status: user.status || 'Active',
+          avatar: user.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.username || user.full_name || 'Typist')}`
+        };
+      }
+
+      // Compute peak speed and average accuracy for active typists
+      const maxWpm = Math.max(...logs.map((l) => Number(l.wpm) || 0));
+      const avgAccuracy = (
+        logs.reduce((acc, l) => acc + (Number(l.accuracy) || 0), 0) / testsCompleted
+      ).toFixed(1);
+
+      let tier = 'Bronze';
+      if (maxWpm >= 80) tier = 'Master';
+      else if (maxWpm >= 50) tier = 'Gold';
+      else if (maxWpm >= 30) tier = 'Silver';
+
+      const streakData = this._getLocal ? this._getLocal(`streak_${user.id}`, { current_streak: 0 }) : { current_streak: 0 };
+
+      return {
+        id: user.id,
+        userId: user.id,
+        name: user.full_name || user.displayName || user.username || 'Typist',
+        user: user.full_name || user.displayName || user.username || 'Typist',
+        email: user.email || 'N/A',
+        wpm: maxWpm,
+        accuracy: parseFloat(avgAccuracy),
+        testsCompleted,
+        streak: streakData?.current_streak || 0,
+        tier,
+        status: user.status || 'Active',
+        avatar: user.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.username || user.full_name || 'Typist')}`
+      };
+    });
+
+    // Sort: Active users first, then by WPM (desc), then Accuracy (desc), then Tests (desc)
+    const sortedLeaderboard = computedLeaderboard.sort((a, b) => {
+      if (a.testsCompleted === 0 && b.testsCompleted > 0) return 1;
+      if (a.testsCompleted > 0 && b.testsCompleted === 0) return -1;
+      if (b.wpm !== a.wpm) return b.wpm - a.wpm;
+      if (b.accuracy !== a.accuracy) return b.accuracy - a.accuracy;
+      return b.testsCompleted - a.testsCompleted;
+    });
+
+    // Assign sequential dynamic ranks (#1, #2, #3, ...)
+    const rankedUsers = sortedLeaderboard.map((user, index) => ({
+      ...user,
+      rank: index + 1
+    }));
+
+    return rankedUsers;
+  }
+
+  async fetchLeaderboard(filter = 'weekly') {
+    return this.fetchGlobalLeaderboard(filter);
   }
 
   // ==========================================================
@@ -3851,9 +4046,15 @@ class SupabaseService {
     // 1. Supabase Postgres Changes and Broadcast
     if (this.isConfigured()) {
       try {
+        const chanId = `scheduled-tests-sub-${Math.random().toString(36).substring(2, 9)}`;
         subChannel = this.supabase
-          .channel('scheduled-tests-realtime')
+          .channel(chanId)
           .on('postgres_changes', { event: '*', schema: 'public', table: 'scheduled_tests' }, (payload) => {
+            if (typeof callback === 'function') {
+              callback({ source: 'postgres_changes', eventType: payload.eventType, data: payload.new || payload.old });
+            }
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'scheduled_test_attempts' }, (payload) => {
             if (typeof callback === 'function') {
               callback({ source: 'postgres_changes', eventType: payload.eventType, data: payload.new || payload.old });
             }
@@ -4116,53 +4317,134 @@ class SupabaseService {
   async recordScheduledTestAttempt(payload) {
     const {
       scheduledTestId,
+      scheduledTestTitle = '',
       userId,
       userName,
       userEmail,
       wpm,
       rawWpm,
       accuracy,
-      duration,
+      duration = 60,
       errors = 0,
-      characters = 0
+      characters = 0,
+      correctCharacters = 0,
+      wrongCharacters = 0,
+      missedCharacters = 0,
+      extraCharacters = 0,
+      score,
+      status = 'completed',
+      promptText = '',
+      typedInput = '',
+      mistakeDetails = [],
+      startedAt = null,
+      completedAt = null,
+      attemptId = null
     } = payload;
 
-    if (!scheduledTestId) return { success: false };
+    if (!scheduledTestId || !userId) return { success: false, message: 'Missing scheduled test or user ID' };
+
+    const calculatedScore = score ?? Math.round((Number(wpm) || 0) * ((Number(accuracy) || 100) / 100));
+    const nowIso = new Date().toISOString();
 
     const attemptRecord = {
-      id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: attemptId || `att_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       scheduled_test_id: scheduledTestId,
+      scheduled_test_title: scheduledTestTitle || '',
       user_id: userId,
       user_name: userName || 'Typist',
       user_email: userEmail || '',
-      wpm: Math.round(wpm),
-      raw_wpm: Math.round(rawWpm || wpm),
-      accuracy: Math.round(accuracy * 10) / 10,
-      duration,
-      errors,
-      characters,
-      status: 'completed',
-      created_at: new Date().toISOString()
+      wpm: Math.round(Number(wpm) || 0),
+      raw_wpm: Math.round(Number(rawWpm || wpm) || 0),
+      accuracy: Math.round((Number(accuracy) || 0) * 10) / 10,
+      duration: Math.max(1, Number(duration) || 60),
+      errors: Math.max(0, Number(errors) || 0),
+      characters: Math.max(0, Number(characters) || 0),
+      correct_characters: Math.max(0, Number(correctCharacters) || 0),
+      wrong_characters: Math.max(0, Number(wrongCharacters) || 0),
+      missed_characters: Math.max(0, Number(missedCharacters) || 0),
+      extra_characters: Math.max(0, Number(extraCharacters) || 0),
+      score: calculatedScore,
+      status: status || 'completed',
+      prompt_text: promptText || '',
+      typed_input: typedInput || '',
+      mistake_details: Array.isArray(mistakeDetails) ? mistakeDetails : [],
+      started_at: startedAt || null,
+      completed_at: completedAt || nowIso,
+      created_at: completedAt || nowIso
     };
 
-    // 1. Supabase insert
+    // 1. Supabase insert with schema resilience
     if (this.isConfigured()) {
       try {
-        await this._withTimeout(
-          this.supabase.from('scheduled_test_attempts').insert([attemptRecord]),
+        // Attempt full enriched insert (omitting custom string ID so DB auto-generates UUID if required)
+        const dbPayload = {
+          scheduled_test_id: scheduledTestId,
+          scheduled_test_title: scheduledTestTitle || null,
+          user_id: userId,
+          user_name: attemptRecord.user_name,
+          user_email: attemptRecord.user_email,
+          wpm: attemptRecord.wpm,
+          raw_wpm: attemptRecord.raw_wpm,
+          accuracy: attemptRecord.accuracy,
+          duration: attemptRecord.duration,
+          errors: attemptRecord.errors,
+          characters: attemptRecord.characters,
+          correct_characters: attemptRecord.correct_characters,
+          wrong_characters: attemptRecord.wrong_characters,
+          missed_characters: attemptRecord.missed_characters,
+          extra_characters: attemptRecord.extra_characters,
+          score: attemptRecord.score,
+          status: attemptRecord.status,
+          prompt_text: attemptRecord.prompt_text,
+          typed_input: attemptRecord.typed_input,
+          mistake_details: attemptRecord.mistake_details,
+          started_at: attemptRecord.started_at,
+          completed_at: attemptRecord.completed_at
+        };
+
+        const { data, error } = await this._withTimeout(
+          this.supabase.from('scheduled_test_attempts').insert([dbPayload]).select(),
           4000
         );
+
+        if (error) {
+          // If remote table is missing enriched columns (e.g. before running migration),
+          // fallback gracefully to base columns so user attempt still records to DB
+          const baseDbPayload = {
+            scheduled_test_id: scheduledTestId,
+            user_id: userId,
+            user_name: attemptRecord.user_name,
+            user_email: attemptRecord.user_email,
+            wpm: attemptRecord.wpm,
+            accuracy: attemptRecord.accuracy,
+            errors: attemptRecord.errors
+          };
+          await this._withTimeout(
+            this.supabase.from('scheduled_test_attempts').insert([baseDbPayload]),
+            4000
+          ).catch(() => {});
+        } else if (data && data[0]?.id) {
+          attemptRecord.id = data[0].id;
+        }
       } catch (err) {
-        console.warn('Supabase scheduled_test_attempts insert notice:', err);
+        console.warn('Supabase scheduled_test_attempts insert note:', err);
       }
     }
 
-    // 2. Local attempts store
+    // 2. Local attempts store (preserves full telemetry, mistake analysis and prompt texts)
     const key = `scheduled_attempts_${scheduledTestId}`;
     const currentAttempts = this._getLocal(key, []);
-    this._setLocal(key, [attemptRecord, ...currentAttempts]);
+    // Prevent duplicate entries within 3 seconds
+    const isDup = currentAttempts.some(
+      a => a.user_id === userId &&
+           a.wpm === attemptRecord.wpm &&
+           Math.abs(new Date(a.created_at || 0).getTime() - new Date(attemptRecord.created_at).getTime()) < 3500
+    );
+    const updatedAttempts = isDup ? currentAttempts : [attemptRecord, ...currentAttempts];
+    this._setLocal(key, updatedAttempts);
+    this._setLocal(`scheduled_attempt_${attemptRecord.id}`, attemptRecord);
 
-    // 3. Increment participant count on scheduled test
+    // 3. Update participant counter
     const allTests = this._getLocal('typemaster_scheduled_tests', []);
     const updatedTests = allTests.map(t => {
       if (t.id === scheduledTestId) {
@@ -4188,13 +4470,34 @@ class SupabaseService {
       }
     }
 
-    // 4. Realtime Broadcast
+    // 4. Realtime Cross-Portal Synchronization
     this.broadcastScheduledTestsSync('ATTEMPT_RECORDED', { scheduledTestId, attempt: attemptRecord });
+    this.broadcastToAdminFeed('SCHEDULED_ATTEMPT_RECORDED', { scheduledTestId, attempt: attemptRecord });
 
     return { success: true, attempt: attemptRecord };
   }
 
-  async fetchScheduledTestAttempts(scheduledTestId) {
+  /**
+   * Secure fetch for scheduled test attempts.
+   * STRICT SECURITY: Authorized administrators can retrieve all participant results.
+   * Ordinary typists calling this will ONLY receive their own attempt.
+   */
+  async fetchScheduledTestAttempts(scheduledTestId, callerUser = null) {
+    if (!scheduledTestId) return [];
+
+    const currentUser = callerUser || this.getCurrentUser();
+    const isAuthorized = this.isAdmin(currentUser);
+
+    // Non-admin callers only receive their own attempt
+    if (!isAuthorized) {
+      if (!currentUser?.id) return [];
+      const userAttempt = await this.getUserScheduledTestAttempt(scheduledTestId, currentUser.id);
+      return userAttempt ? [userAttempt] : [];
+    }
+
+    let results = [];
+
+    // 1. Live Supabase fetch for authorized admin
     if (this.isConfigured()) {
       try {
         const { data, error } = await this._withTimeout(
@@ -4203,24 +4506,171 @@ class SupabaseService {
             .select('*')
             .eq('scheduled_test_id', scheduledTestId)
             .order('created_at', { ascending: false }),
-          4000
+          5000
         );
         if (!error && Array.isArray(data)) {
-          return data;
+          results = data;
         }
       } catch (err) {
         console.warn('fetchScheduledTestAttempts notice:', err);
       }
     }
 
-    return this._getLocal(`scheduled_attempts_${scheduledTestId}`, []);
+    // 2. Local fallback & merging to ensure rich telemetry (score, prompt, mistake_details)
+    const localAttempts = this._getLocal(`scheduled_attempts_${scheduledTestId}`, []);
+
+    if (results.length === 0) {
+      results = localAttempts;
+    } else {
+      // Merge local telemetry if remote row only had basic columns
+      results = results.map(r => {
+        const matchedLocal = localAttempts.find(l => l.id === r.id || (l.user_id === r.user_id && l.wpm === r.wpm));
+        return {
+          ...r,
+          duration: r.duration || matchedLocal?.duration || 60,
+          characters: r.characters ?? matchedLocal?.characters ?? 0,
+          correct_characters: r.correct_characters ?? matchedLocal?.correct_characters ?? r.characters ?? 0,
+          wrong_characters: r.wrong_characters ?? matchedLocal?.wrong_characters ?? 0,
+          missed_characters: r.missed_characters ?? matchedLocal?.missed_characters ?? 0,
+          extra_characters: r.extra_characters ?? matchedLocal?.extra_characters ?? 0,
+          score: r.score ?? matchedLocal?.score ?? Math.round((r.wpm || 0) * ((r.accuracy || 100) / 100)),
+          status: r.status || matchedLocal?.status || 'completed',
+          prompt_text: r.prompt_text || matchedLocal?.prompt_text || '',
+          typed_input: r.typed_input || matchedLocal?.typed_input || '',
+          mistake_details: r.mistake_details || matchedLocal?.mistake_details || []
+        };
+      });
+    }
+
+    // Deterministic ranking order: Score/WPM DESC, Accuracy DESC, Errors ASC, CreatedAt ASC
+    return results.sort((a, b) => {
+      const scoreA = a.score ?? Math.round((a.wpm || 0) * ((a.accuracy || 100) / 100));
+      const scoreB = b.score ?? Math.round((b.wpm || 0) * ((b.accuracy || 100) / 100));
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      if (b.accuracy !== a.accuracy) return b.accuracy - a.accuracy;
+      if (a.errors !== b.errors) return a.errors - b.errors;
+      return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+    });
+  }
+
+  /**
+   * Deterministic Leaderboard Calculation for Scheduled Tests.
+   * Admin-Only: strictly calculates ranks based on retake policy.
+   * Policies:
+   *   'best_attempt' (default): Best score/wpm per user
+   *   'latest_attempt': Most recent attempt per user
+   */
+  async fetchScheduledTestLeaderboard(scheduledTestId, retakePolicy = 'best_attempt', callerUser = null) {
+    if (!scheduledTestId) return [];
+
+    const attempts = await this.fetchScheduledTestAttempts(scheduledTestId, callerUser);
+    if (!attempts || attempts.length === 0) return [];
+
+    // Filter out abandoned or incomplete attempts
+    const eligibleAttempts = attempts.filter(
+      a => a.status !== 'abandoned' && a.status !== 'incomplete' && a.status !== 'failed'
+    );
+
+    // Group by user_id
+    const userAttemptsMap = new Map();
+    for (const att of eligibleAttempts) {
+      const uId = att.user_id || 'unknown';
+      if (!userAttemptsMap.has(uId)) {
+        userAttemptsMap.set(uId, []);
+      }
+      userAttemptsMap.get(uId).push(att);
+    }
+
+    // Select candidate attempt per user according to retake policy
+    const leaderboardCandidates = [];
+    userAttemptsMap.forEach((userList) => {
+      if (userList.length === 1) {
+        leaderboardCandidates.push(userList[0]);
+        return;
+      }
+
+      if (retakePolicy === 'latest_attempt') {
+        const sortedLatest = [...userList].sort(
+          (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+        );
+        leaderboardCandidates.push(sortedLatest[0]);
+      } else {
+        // 'best_attempt'
+        const sortedBest = [...userList].sort((a, b) => {
+          const scoreA = a.score ?? Math.round((a.wpm || 0) * ((a.accuracy || 100) / 100));
+          const scoreB = b.score ?? Math.round((b.wpm || 0) * ((b.accuracy || 100) / 100));
+          if (scoreB !== scoreA) return scoreB - scoreA;
+          if (b.accuracy !== a.accuracy) return b.accuracy - a.accuracy;
+          if (a.errors !== b.errors) return a.errors - b.errors;
+          return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+        });
+        leaderboardCandidates.push(sortedBest[0]);
+      }
+    });
+
+    // Deterministic overall leaderboard sorting
+    leaderboardCandidates.sort((a, b) => {
+      const scoreA = a.score ?? Math.round((a.wpm || 0) * ((a.accuracy || 100) / 100));
+      const scoreB = b.score ?? Math.round((b.wpm || 0) * ((b.accuracy || 100) / 100));
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      if (b.accuracy !== a.accuracy) return b.accuracy - a.accuracy;
+      if (a.errors !== b.errors) return a.errors - b.errors;
+      return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+    });
+
+    // Assign ranks (handling ties consistently)
+    let currentRank = 1;
+    return leaderboardCandidates.map((entry, index) => {
+      if (index > 0) {
+        const prev = leaderboardCandidates[index - 1];
+        const prevScore = prev.score ?? Math.round((prev.wpm || 0) * ((prev.accuracy || 100) / 100));
+        const currScore = entry.score ?? Math.round((entry.wpm || 0) * ((entry.accuracy || 100) / 100));
+        const isTie = prevScore === currScore && prev.accuracy === entry.accuracy && prev.errors === entry.errors;
+        if (!isTie) {
+          currentRank = index + 1;
+        }
+      }
+      return {
+        ...entry,
+        rank: currentRank,
+        isPodium: currentRank <= 3,
+        avatar_url: entry.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(entry.user_name || 'Typist')}`
+      };
+    });
   }
 
   async getUserScheduledTestAttempt(scheduledTestId, userId) {
     if (!scheduledTestId || !userId) return null;
-    const attempts = await this.fetchScheduledTestAttempts(scheduledTestId);
-    return attempts.find(a => a.user_id === userId) || null;
+
+    // Check local store first
+    const localAttempts = this._getLocal(`scheduled_attempts_${scheduledTestId}`, []);
+    const foundLocal = localAttempts.find(a => a.user_id === userId);
+    if (foundLocal) return foundLocal;
+
+    // Query Supabase for user's own attempt
+    if (this.isConfigured()) {
+      try {
+        const { data, error } = await this._withTimeout(
+          this.supabase
+            .from('scheduled_test_attempts')
+            .select('*')
+            .eq('scheduled_test_id', scheduledTestId)
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(1),
+          4000
+        );
+        if (!error && Array.isArray(data) && data.length > 0) {
+          return data[0];
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return null;
   }
 }
 
 export const supabaseService = new SupabaseService();
+export const supabase = supabaseService.supabase;

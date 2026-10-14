@@ -26,6 +26,8 @@ import {
 } from 'lucide-react';
 import { supabaseService } from '../../services/supabaseService';
 import { adminService } from '../../services/adminService';
+import ScheduledTestResultsBoard from './ScheduledTestResultsBoard';
+import ScheduledTestLeaderboard from './ScheduledTestLeaderboard';
 
 export default function AdminScheduledTestsView({
   dateRange,
@@ -35,6 +37,10 @@ export default function AdminScheduledTestsView({
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
+
+  // Top-Level Section Navigation: 'tests' | 'results' | 'leaderboard'
+  const [adminSection, setAdminSection] = useState('tests');
+  const [selectedTestIdForResults, setSelectedTestIdForResults] = useState(null);
 
   // Filters & Search
   const [activeTab, setActiveTab] = useState('all'); // 'all', 'upcoming', 'live', 'completed', 'cancelled', 'draft'
@@ -436,18 +442,16 @@ export default function AdminScheduledTestsView({
     loadTests();
   };
 
-  // Open Participants List
-  const handleOpenParticipants = async (test) => {
-    setParticipantsModalTest(test);
-    setLoadingAttempts(true);
-    try {
-      const attempts = await supabaseService.fetchScheduledTestAttempts(test.id);
-      setAttemptsList(attempts || []);
-    } catch {
-      setAttemptsList([]);
-    } finally {
-      setLoadingAttempts(false);
-    }
+  // Open Participants / Results Board
+  const handleOpenParticipants = (test) => {
+    setSelectedTestIdForResults(test.id);
+    setAdminSection('results');
+  };
+
+  // Open Leaderboard for Test
+  const handleOpenLeaderboard = (test) => {
+    setSelectedTestIdForResults(test.id);
+    setAdminSection('leaderboard');
   };
 
   // Export to Excel
@@ -646,15 +650,139 @@ export default function AdminScheduledTestsView({
         </div>
       </div>
 
-      {/* Dashboard Summary Cards (Row of 4 Cards) */}
+      {/* Top Section Navigation Tabs */}
       <div
         style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
-          gap: '18px',
-          marginBottom: '28px'
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          background: '#FFFFFF',
+          padding: '6px',
+          borderRadius: '16px',
+          border: '1px solid #E2E8F0',
+          marginBottom: '26px',
+          boxShadow: '0 2px 6px rgba(0,0,0,0.03)',
+          width: 'fit-content'
         }}
       >
+        <button
+          onClick={() => setAdminSection('tests')}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '10px 20px',
+            borderRadius: '12px',
+            border: 'none',
+            background: adminSection === 'tests' ? '#2563EB' : 'transparent',
+            color: adminSection === 'tests' ? '#FFFFFF' : '#64748B',
+            fontWeight: 700,
+            fontSize: '0.88rem',
+            cursor: 'pointer',
+            boxShadow: adminSection === 'tests' ? '0 4px 12px rgba(37, 99, 235, 0.25)' : 'none',
+            transition: 'all 0.15s'
+          }}
+        >
+          <CalendarClock size={16} />
+          <span>Scheduled Tests</span>
+          <span
+            style={{
+              fontSize: '0.74rem',
+              padding: '2px 8px',
+              borderRadius: '999px',
+              background: adminSection === 'tests' ? 'rgba(255,255,255,0.2)' : '#F1F5F9',
+              color: adminSection === 'tests' ? '#FFFFFF' : '#64748B'
+            }}
+          >
+            {tests.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => {
+            setAdminSection('results');
+            if (!selectedTestIdForResults && tests.length > 0) {
+              setSelectedTestIdForResults(tests[0].id);
+            }
+          }}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '10px 20px',
+            borderRadius: '12px',
+            border: 'none',
+            background: adminSection === 'results' ? '#2563EB' : 'transparent',
+            color: adminSection === 'results' ? '#FFFFFF' : '#64748B',
+            fontWeight: 700,
+            fontSize: '0.88rem',
+            cursor: 'pointer',
+            boxShadow: adminSection === 'results' ? '0 4px 12px rgba(37, 99, 235, 0.25)' : 'none',
+            transition: 'all 0.15s'
+          }}
+        >
+          <FileSpreadsheet size={16} />
+          <span>Results Board</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setAdminSection('leaderboard');
+            if (!selectedTestIdForResults && tests.length > 0) {
+              setSelectedTestIdForResults(tests[0].id);
+            }
+          }}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '10px 20px',
+            borderRadius: '12px',
+            border: 'none',
+            background: adminSection === 'leaderboard' ? '#2563EB' : 'transparent',
+            color: adminSection === 'leaderboard' ? '#FFFFFF' : '#64748B',
+            fontWeight: 700,
+            fontSize: '0.88rem',
+            cursor: 'pointer',
+            boxShadow: adminSection === 'leaderboard' ? '0 4px 12px rgba(37, 99, 235, 0.25)' : 'none',
+            transition: 'all 0.15s'
+          }}
+        >
+          <Trophy size={16} />
+          <span>Leaderboard</span>
+        </button>
+      </div>
+
+      {/* Scheduled Test Results Board Section */}
+      {adminSection === 'results' && (
+        <ScheduledTestResultsBoard
+          tests={tests}
+          selectedTestId={selectedTestIdForResults}
+          onSelectTest={(id) => setSelectedTestIdForResults(id)}
+        />
+      )}
+
+      {/* Scheduled Test Leaderboard Section */}
+      {adminSection === 'leaderboard' && (
+        <ScheduledTestLeaderboard
+          tests={tests}
+          selectedTestId={selectedTestIdForResults}
+          onSelectTest={(id) => setSelectedTestIdForResults(id)}
+        />
+      )}
+
+      {/* Scheduled Tests Management Section */}
+      {adminSection === 'tests' && (
+        <>
+          {/* Dashboard Summary Cards (Row of 4 Cards) */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
+              gap: '18px',
+              marginBottom: '28px'
+            }}
+          >
         {/* Card 1: Total Scheduled Tests */}
         <div
           style={{
@@ -1289,6 +1417,38 @@ export default function AdminScheduledTestsView({
                           {/* Actions matching reference mockup icons */}
                           <td style={{ padding: '14px', textAlign: 'center' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                              {/* Results Board */}
+                              <button
+                                onClick={() => handleOpenParticipants(t)}
+                                title="View Scheduled Test Results Board"
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#10B981',
+                                  padding: '5px',
+                                  borderRadius: '6px',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <FileSpreadsheet size={15} />
+                              </button>
+
+                              {/* Leaderboard */}
+                              <button
+                                onClick={() => handleOpenLeaderboard(t)}
+                                title="View Challenge Leaderboard"
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#F59E0B',
+                                  padding: '5px',
+                                  borderRadius: '6px',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <Trophy size={15} />
+                              </button>
+
                               {/* Preview Eye */}
                               <button
                                 onClick={() => setPreviewTest(t)}
@@ -2029,6 +2189,8 @@ export default function AdminScheduledTestsView({
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* Preview Passage Modal */}
       {previewTest && (

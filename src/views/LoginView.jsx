@@ -23,6 +23,7 @@ import {
 import { supabaseService } from '../services/supabaseService';
 import keyboardHeroImg from '../assets/keyboard_hero.jpg';
 import ParAcademyLogo from '../components/ParAcademyLogo';
+import WhatsAppSupport from '../components/WhatsAppSupport';
 
 export default function LoginView({
   onLoginSuccess,
@@ -1629,10 +1630,13 @@ export default function LoginView({
             <span style={{ color: '#2563EB', fontWeight: 600, cursor: 'pointer' }}>Privacy Policy</span>.
           </p>
         </div>
+        {/* Floating WhatsApp Support Button */}
+        <WhatsAppSupport message="Hello! I need assistance logging into TypeMaster." />
       </div>
     </div>
   );
 }
+
 
 const labelStyle = {
   display: 'block',

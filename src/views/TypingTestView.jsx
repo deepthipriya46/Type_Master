@@ -124,7 +124,7 @@ export default function TypingTestView({
             durationSeconds: targetSec,
             excludeText: exclude || promptText || '',
             apiKey: geminiConfig?.apiKey || '',
-            model: geminiConfig?.model || 'gemini-2.5-flash'
+            model: geminiConfig?.model || 'gemini-3.5-flash'
           }),
           signal: controller.signal
         });
@@ -458,6 +458,10 @@ export default function TypingTestView({
       difficulty,
       scheduled_test_id: initialSettings.scheduledTestId || null,
       scheduled_test_title: initialSettings.scheduledTestTitle || null,
+      started_at: startTimeRef.current ? new Date(startTimeRef.current).toISOString() : new Date(now.getTime() - finalDuration * 1000).toISOString(),
+      completed_at: now.toISOString(),
+      score: Math.round(finalWpm * (finalAccuracy / 100)),
+      status: 'completed',
       promptText,
       prompt_text: promptText,
       typedInput: currentInput,
@@ -674,6 +678,45 @@ export default function TypingTestView({
           <span style={{ fontSize: '0.78rem', color: '#C7D2FE' }}>
             Official Passage Loaded • Verified Attempt
           </span>
+        </div>
+      )}
+
+      {/* If this is a targeted practice drill, display prominent banner */}
+      {(initialSettings.drillTitle || initialSettings.focusKeys) && (
+        <div
+          style={{
+            background: 'linear-gradient(135deg, #1E293B 0%, #0F172A 100%)',
+            color: '#FFFFFF',
+            padding: '12px 20px',
+            borderRadius: '12px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '10px',
+            boxShadow: '0 4px 14px rgba(15, 23, 42, 0.25)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <span style={{ background: '#4F46E5', color: '#FFFFFF', padding: '3px 8px', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 800 }}>
+              PRACTICE DRILL
+            </span>
+            <span style={{ fontWeight: 800, fontSize: '0.94rem' }}>
+              {initialSettings.drillTitle || 'Targeted Practice'}
+            </span>
+            <span style={{ fontSize: '0.74rem', background: '#334155', color: '#CBD5E1', padding: '2px 8px', borderRadius: '4px' }}>
+              {initialSettings.category} • {initialSettings.difficulty}
+            </span>
+          </div>
+          {initialSettings.focusKeys && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem' }}>
+              <span style={{ color: '#94A3B8', fontWeight: 600 }}>Focus Keys:</span>
+              <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#38BDF8', background: 'rgba(56, 189, 248, 0.1)', padding: '2px 8px', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.2)' }}>
+                {Array.isArray(initialSettings.focusKeys) ? initialSettings.focusKeys.join(' ') : initialSettings.focusKeys}
+              </span>
+            </div>
+          )}
         </div>
       )}
 

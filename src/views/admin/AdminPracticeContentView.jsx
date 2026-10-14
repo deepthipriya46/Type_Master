@@ -18,7 +18,8 @@ import { supabaseService } from '../../services/supabaseService';
 
 export default function AdminPracticeContentView() {
   const [items, setItems] = useState(() => adminService.getPracticeContent());
-  const [selectedCategory, setSelectedCategory] = useState('All'); // 'All', 'Paragraphs', 'Words', 'Quotes', 'Code Passages'
+  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [selectedDifficulty, setSelectedDifficulty] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -26,10 +27,10 @@ export default function AdminPracticeContentView() {
 
   const [form, setForm] = useState({
     title: '',
-    category: 'Paragraphs',
+    category: 'Mathematics',
     difficulty: 'Medium',
-    tags: 'Focus, Drill',
-    focus_keys: 'A, S, D, F, J, K, L',
+    tags: 'Math, Algebra, Equations',
+    focus_keys: '+, -, *, /, =, (, )',
     content: '',
     publication_status: 'published',
     is_active: true
@@ -46,23 +47,40 @@ export default function AdminPracticeContentView() {
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
-      const matchCat = selectedCategory === 'All' ? true : item.category === selectedCategory;
-      const matchSearch =
-        item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.tags.some((t) => t.toLowerCase().includes(searchQuery.toLowerCase()));
-      return matchCat && matchSearch;
+      const itemCat = (item.category || '').toLowerCase().trim();
+      const selCat = selectedCategory.toLowerCase().trim();
+      const matchCat =
+        selectedCategory === 'All' ||
+        itemCat === selCat ||
+        (selCat.includes('code') && itemCat.includes('code')) ||
+        (selCat.includes('math') && itemCat.includes('math')) ||
+        (selCat.includes('science') && itemCat.includes('science'));
+
+      const itemDiff = (item.difficulty || 'Medium').toLowerCase().trim();
+      const selDiff = selectedDifficulty.toLowerCase().trim();
+      const matchDiff = selectedDifficulty === 'All' || itemDiff === selDiff;
+
+      const q = searchQuery.toLowerCase().trim();
+      if (!q) return matchCat && matchDiff;
+
+      const title = (item.title || '').toLowerCase();
+      const content = (item.content || item.text || '').toLowerCase();
+      const tags = (Array.isArray(item.tags) ? item.tags.join(' ') : (item.tags || '')).toLowerCase();
+      const keys = (Array.isArray(item.focus_keys) ? item.focus_keys.join(' ') : (item.focus_keys || '')).toLowerCase();
+
+      const matchSearch = title.includes(q) || content.includes(q) || tags.includes(q) || keys.includes(q);
+      return matchCat && matchDiff && matchSearch;
     });
-  }, [items, selectedCategory, searchQuery]);
+  }, [items, selectedCategory, selectedDifficulty, searchQuery]);
 
   const handleOpenAddModal = () => {
     setEditingId(null);
     setForm({
       title: '',
-      category: selectedCategory === 'All' ? 'Paragraphs' : selectedCategory,
-      difficulty: 'Medium',
-      tags: 'Daily, Training',
-      focus_keys: 'A, S, D, F, J, K, L',
+      category: selectedCategory === 'All' ? 'Mathematics' : selectedCategory,
+      difficulty: selectedDifficulty === 'All' ? 'Medium' : selectedDifficulty,
+      tags: 'Math, Drill, Practice',
+      focus_keys: '+, -, *, /, =',
       content: '',
       publication_status: 'published',
       is_active: true
@@ -203,7 +221,23 @@ export default function AdminPracticeContentView() {
     }
   };
 
-  const categories = ['All', 'Paragraphs', 'Words', 'Quotes', 'Code Passages'];
+  const categories = [
+    'All',
+    'Mathematics',
+    'Science & Nature',
+    'Technology',
+    'Code Passages',
+    'Paragraphs',
+    'Quotes',
+    'Words'
+  ];
+
+  const difficulties = [
+    'All',
+    'Easy',
+    'Medium',
+    'Hard'
+  ];
 
   return (
     <div style={{ padding: '24px 32px', backgroundColor: '#F8FAFC', minHeight: 'calc(100vh - 70px)' }}>
@@ -248,7 +282,7 @@ export default function AdminPracticeContentView() {
             Practice Content Management
           </h1>
           <p style={{ fontSize: '0.86rem', color: '#64748B', marginTop: '4px', marginBottom: 0 }}>
-            Manage passages, word drills, quotes, and coding exercises
+            Manage domain-specific passages, mathematical expressions, quotes, and coding drills
           </p>
         </div>
 
@@ -274,7 +308,7 @@ export default function AdminPracticeContentView() {
         </button>
       </div>
 
-      {/* Category Tabs & Search Bar */}
+      {/* Category Tabs, Difficulty Filter & Search Bar */}
       <div
         style={{
           backgroundColor: '#FFFFFF',
@@ -283,63 +317,103 @@ export default function AdminPracticeContentView() {
           border: '1px solid #E2E8F0',
           marginBottom: '20px',
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
+          flexDirection: 'column',
           gap: '12px'
         }}
       >
-        {/* Category Pills */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          {categories.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
+        {/* Top Row: Category Tabs & Search Bar */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+          {/* Category Pills */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#94A3B8', marginRight: '4px' }}>Category:</span>
+            {categories.map((cat) => {
+              const isSel = selectedCategory === cat;
+              return (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: isSel ? '#4F46E5' : '#F1F5F9',
+                    color: isSel ? '#FFFFFF' : '#475569',
+                    fontSize: '0.81rem',
+                    fontWeight: isSel ? 700 : 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s'
+                  }}
+                >
+                  {cat}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Search */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              background: '#F8FAFC',
+              border: '1px solid #E2E8F0',
+              borderRadius: '9px',
+              padding: '7px 12px',
+              minWidth: '260px'
+            }}
+          >
+            <Search size={16} color="#94A3B8" />
+            <input
+              type="text"
+              placeholder="Search title, tag, or content..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
               style={{
-                padding: '7px 14px',
-                borderRadius: '8px',
                 border: 'none',
-                background: selectedCategory === cat ? '#EEF2FF' : 'transparent',
-                color: selectedCategory === cat ? '#4F46E5' : '#64748B',
-                fontSize: '0.82rem',
-                fontWeight: selectedCategory === cat ? 700 : 500,
-                cursor: 'pointer',
-                transition: 'all 0.15s'
+                background: 'transparent',
+                outline: 'none',
+                fontSize: '0.84rem',
+                color: '#1E293B',
+                width: '100%'
               }}
-            >
-              {cat}
-            </button>
-          ))}
+            />
+          </div>
         </div>
 
-        {/* Search */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            background: '#F8FAFC',
-            border: '1px solid #E2E8F0',
-            borderRadius: '9px',
-            padding: '7px 12px',
-            minWidth: '280px'
-          }}
-        >
-          <Search size={16} color="#94A3B8" />
-          <input
-            type="text"
-            placeholder="Search title, tag, or content..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{
-              border: 'none',
-              background: 'transparent',
-              outline: 'none',
-              fontSize: '0.84rem',
-              color: '#1E293B',
-              width: '100%'
-            }}
-          />
+        {/* Bottom Row: Difficulty Sub-Filter Tabs */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingTop: '10px', borderTop: '1px solid #F1F5F9' }}>
+          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#94A3B8', marginRight: '4px' }}>Difficulty:</span>
+          {difficulties.map((diff) => {
+            const isSel = selectedDifficulty === diff;
+            const diffColor = diff === 'Easy' ? '#10B981' : diff === 'Medium' ? '#F59E0B' : diff === 'Hard' ? '#EF4444' : '#4F46E5';
+            const diffBg = isSel ? (diff === 'Easy' ? '#ECFDF5' : diff === 'Medium' ? '#FFFBEB' : diff === 'Hard' ? '#FEF2F2' : '#EEF2FF') : '#F8FAFC';
+            return (
+              <button
+                key={diff}
+                onClick={() => setSelectedDifficulty(diff)}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: '7px',
+                  border: isSel ? `1.5px solid ${diffColor}` : '1px solid #E2E8F0',
+                  background: diffBg,
+                  color: isSel ? diffColor : '#64748B',
+                  fontSize: '0.78rem',
+                  fontWeight: isSel ? 700 : 500,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'all 0.15s'
+                }}
+              >
+                {diff !== 'All' && (
+                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: diffColor }} />
+                )}
+                {diff === 'All' ? 'All Difficulties' : diff}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -351,121 +425,194 @@ export default function AdminPracticeContentView() {
           gap: '16px'
         }}
       >
-        {filteredItems.map((item) => (
-          <div
-            key={item.id}
-            style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: '14px',
-              border: '1px solid #E2E8F0',
-              padding: '18px 20px',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
-              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.03)',
-              position: 'relative'
-            }}
-          >
-            <div>
-              {/* Card Header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <span
+        {filteredItems.map((item) => {
+          const diffColor =
+            item.difficulty === 'Easy'
+              ? '#10B981'
+              : item.difficulty === 'Hard'
+              ? '#EF4444'
+              : '#F59E0B';
+          const diffBg =
+            item.difficulty === 'Easy'
+              ? '#ECFDF5'
+              : item.difficulty === 'Hard'
+              ? '#FEF2F2'
+              : '#FFFBEB';
+          const diffBorder =
+            item.difficulty === 'Easy'
+              ? '#A7F3D0'
+              : item.difficulty === 'Hard'
+              ? '#FECACA'
+              : '#FDE68A';
+
+          return (
+            <div
+              key={item.id}
+              style={{
+                backgroundColor: '#FFFFFF',
+                borderRadius: '14px',
+                border: '1px solid #E2E8F0',
+                padding: '18px 20px',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.03)',
+                position: 'relative'
+              }}
+            >
+              <div>
+                {/* Card Header: Category & Difficulty Badges + Actions */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span
+                      style={{
+                        fontSize: '0.72rem',
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        fontWeight: 700,
+                        background:
+                          item.category === 'Code Passages' || item.category === 'Programming / Code'
+                            ? '#EEF2FF'
+                            : item.category === 'Mathematics'
+                            ? '#F5F3FF'
+                            : item.category === 'Science & Nature'
+                            ? '#ECFDF5'
+                            : item.category === 'Quotes'
+                            ? '#FFFBEB'
+                            : item.category === 'Technology'
+                            ? '#EFF6FF'
+                            : '#F1F5F9',
+                        color:
+                          item.category === 'Code Passages' || item.category === 'Programming / Code'
+                            ? '#4F46E5'
+                            : item.category === 'Mathematics'
+                            ? '#7C3AED'
+                            : item.category === 'Science & Nature'
+                            ? '#059669'
+                            : item.category === 'Quotes'
+                            ? '#D97706'
+                            : item.category === 'Technology'
+                            ? '#2563EB'
+                            : '#475569'
+                      }}
+                    >
+                      {item.category}
+                    </span>
+
+                    {/* Difficulty Badge */}
+                    <span
+                      style={{
+                        fontSize: '0.70rem',
+                        padding: '2px 7px',
+                        borderRadius: '6px',
+                        fontWeight: 700,
+                        background: diffBg,
+                        color: diffColor,
+                        border: `1px solid ${diffBorder}`
+                      }}
+                    >
+                      {item.difficulty || 'Medium'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <button
+                      onClick={() => handleOpenEditModal(item)}
+                      style={iconBtnStyle}
+                      title="Edit item"
+                    >
+                      <Edit size={13} color="#64748B" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(item)}
+                      style={iconBtnStyle}
+                      title="Delete item"
+                    >
+                      <Trash2 size={13} color="#EF4444" />
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: '0.98rem', fontWeight: 700, color: '#0F172A', marginBottom: '6px' }}>
+                  {item.title}
+                </div>
+
+                {/* Focus Keys Banner */}
+                {item.focus_keys && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      fontSize: '0.72rem',
+                      color: '#4F46E5',
+                      background: '#EEF2FF',
+                      padding: '3px 8px',
+                      borderRadius: '5px',
+                      marginBottom: '8px',
+                      width: 'fit-content'
+                    }}
+                  >
+                    <span style={{ fontWeight: 700 }}>Focus Keys:</span>
+                    <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                      {Array.isArray(item.focus_keys) ? item.focus_keys.join(' ') : item.focus_keys}
+                    </span>
+                  </div>
+                )}
+
+                {/* Text Preview Box */}
+                <div
                   style={{
-                    fontSize: '0.72rem',
-                    padding: '3px 8px',
-                    borderRadius: '6px',
-                    fontWeight: 700,
-                    background:
-                      item.category === 'Code Passages'
-                        ? '#EEF2FF'
-                        : item.category === 'Quotes'
-                        ? '#FFFBEB'
-                        : '#ECFDF5',
-                    color:
-                      item.category === 'Code Passages'
-                        ? '#4F46E5'
-                        : item.category === 'Quotes'
-                        ? '#D97706'
-                        : '#059669'
+                    background: '#F8FAFC',
+                    border: '1px solid #F1F5F9',
+                    borderRadius: '8px',
+                    padding: '10px 12px',
+                    fontSize: '0.8rem',
+                    lineHeight: '1.5',
+                    color: '#334155',
+                    maxHeight: '100px',
+                    overflowY: 'auto',
+                    fontFamily: item.category === 'Code Passages' || item.category === 'Mathematics' ? 'monospace' : 'inherit',
+                    whiteSpace: 'pre-wrap',
+                    marginBottom: '12px'
                   }}
                 >
-                  {item.category}
-                </span>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <button
-                    onClick={() => handleOpenEditModal(item)}
-                    style={iconBtnStyle}
-                    title="Edit item"
-                  >
-                    <Edit size={13} color="#64748B" />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(item)}
-                    style={iconBtnStyle}
-                    title="Delete item"
-                  >
-                    <Trash2 size={13} color="#EF4444" />
-                  </button>
+                  {item.content}
                 </div>
               </div>
 
-              <div style={{ fontSize: '0.98rem', fontWeight: 700, color: '#0F172A', marginBottom: '8px' }}>
-                {item.title}
-              </div>
-
-              {/* Text Preview Box */}
+              {/* Footer with tags and word count */}
               <div
                 style={{
-                  background: '#F8FAFC',
-                  border: '1px solid #F1F5F9',
-                  borderRadius: '8px',
-                  padding: '10px 12px',
-                  fontSize: '0.8rem',
-                  lineHeight: '1.5',
-                  color: '#334155',
-                  maxHeight: '100px',
-                  overflowY: 'auto',
-                  fontFamily: item.category === 'Code Passages' ? 'monospace' : 'inherit',
-                  whiteSpace: 'pre-wrap',
-                  marginBottom: '12px'
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  paddingTop: '10px',
+                  borderTop: '1px solid #F1F5F9',
+                  fontSize: '0.74rem'
                 }}
               >
-                {item.content}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                  {(item.tags || []).map((t) => (
+                    <span
+                      key={t}
+                      style={{
+                        background: '#F1F5F9',
+                        color: '#475569',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        fontWeight: 600
+                      }}
+                    >
+                      #{t}
+                    </span>
+                  ))}
+                </div>
+                <span style={{ color: '#94A3B8', fontWeight: 600 }}>{item.wordCount || (item.content ? item.content.split(/\s+/).filter(Boolean).length : 0)} words</span>
               </div>
             </div>
-
-            {/* Footer with tags and word count */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                paddingTop: '10px',
-                borderTop: '1px solid #F1F5F9',
-                fontSize: '0.74rem'
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                {item.tags.map((t) => (
-                  <span
-                    key={t}
-                    style={{
-                      background: '#F1F5F9',
-                      color: '#475569',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                      fontWeight: 600
-                    }}
-                  >
-                    #{t}
-                  </span>
-                ))}
-              </div>
-              <span style={{ color: '#94A3B8', fontWeight: 600 }}>{item.wordCount} words</span>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Add / Edit Modal */}
@@ -487,7 +634,7 @@ export default function AdminPracticeContentView() {
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Ergonomics & Posture Guide"
+                  placeholder="e.g. Arithmetic Operators & Expressions"
                   value={form.title}
                   onChange={(e) => setForm({ ...form, title: e.target.value })}
                   style={inputStyle}
@@ -502,23 +649,56 @@ export default function AdminPracticeContentView() {
                     onChange={(e) => setForm({ ...form, category: e.target.value })}
                     style={inputStyle}
                   >
-                    <option value="Paragraphs">Paragraphs</option>
-                    <option value="Words">Words</option>
-                    <option value="Quotes">Quotes</option>
+                    <option value="Mathematics">Mathematics</option>
+                    <option value="Science & Nature">Science & Nature</option>
+                    <option value="Programming / Code">Programming / Code</option>
+                    <option value="Technology">Technology</option>
                     <option value="Code Passages">Code Passages</option>
+                    <option value="Paragraphs">Paragraphs</option>
+                    <option value="Quotes">Quotes</option>
+                    <option value="Words">Words</option>
                   </select>
                 </div>
                 <div>
-                  <label style={labelStyle}>Difficulty</label>
-                  <select
-                    value={form.difficulty}
-                    onChange={(e) => setForm({ ...form, difficulty: e.target.value })}
-                    style={inputStyle}
-                  >
-                    <option value="Easy">Easy</option>
-                    <option value="Medium">Medium</option>
-                    <option value="Hard">Hard</option>
-                  </select>
+                  <label style={labelStyle}>Difficulty Level</label>
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
+                    {['Easy', 'Medium', 'Hard'].map((diff) => {
+                      const isSel = form.difficulty === diff;
+                      const diffColor = diff === 'Easy' ? '#10B981' : diff === 'Medium' ? '#F59E0B' : '#EF4444';
+                      const diffBg = isSel ? (diff === 'Easy' ? '#ECFDF5' : diff === 'Medium' ? '#FFFBEB' : '#FEF2F2') : '#F8FAFC';
+                      return (
+                        <label
+                          key={diff}
+                          style={{
+                            flex: 1,
+                            padding: '8px 6px',
+                            borderRadius: '8px',
+                            border: isSel ? `2px solid ${diffColor}` : '1px solid #CBD5E1',
+                            background: diffBg,
+                            color: isSel ? diffColor : '#475569',
+                            fontWeight: isSel ? 700 : 500,
+                            fontSize: '0.80rem',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '5px',
+                            transition: 'all 0.15s'
+                          }}
+                        >
+                          <input
+                            type="radio"
+                            name="formDifficulty"
+                            value={diff}
+                            checked={isSel}
+                            onChange={() => setForm({ ...form, difficulty: diff })}
+                            style={{ margin: 0, accentColor: diffColor, cursor: 'pointer' }}
+                          />
+                          {diff}
+                        </label>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 

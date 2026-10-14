@@ -20,6 +20,9 @@ import PremiumModal from './components/PremiumModal';
 import TestDetailModal from './components/TestDetailModal';
 import ReviewMistakesView from './views/ReviewMistakesView';
 import PasswordResetModal from './components/PasswordResetModal';
+import ScheduledTestReminderPopup from './components/ScheduledTestReminderPopup';
+import WhatsAppSupport from './components/WhatsAppSupport';
+import TypeMasterChatbot from './components/TypeMasterChatbot';
 import { supabaseService } from './services/supabaseService';
 import { useAuth } from './context/AuthContext';
 import { X } from 'lucide-react';
@@ -248,7 +251,11 @@ export default function App() {
       } else {
         window.history.replaceState(null, '', '/dashboard');
       }
-    } else if (userViewMap[path] && portal === 'user') {
+    } else if (userViewMap[path]) {
+      if (portal !== 'user') {
+        setPortal('user');
+        localStorage.setItem('typemaster_active_portal', 'user');
+      }
       setCurrentView(userViewMap[path]);
     }
   }, [isAuthenticated, portal, authUser, effectiveUser]);
@@ -514,6 +521,11 @@ export default function App() {
             refreshDashboard();
           }}
         />
+        {/* TypeMaster AI Assistant Floating Chatbot (Login Page - Bottom Right Corner) */}
+        <TypeMasterChatbot
+          portal={isTargetingAdmin ? 'admin' : 'user'}
+          user={effectiveUser}
+        />
       </>
     );
   }
@@ -558,6 +570,10 @@ export default function App() {
           }}
           onSignOut={handleSignOut}
           onUserUpdate={refreshDashboard}
+        />
+        <TypeMasterChatbot
+          portal="admin"
+          user={adminProfile}
         />
       </>
     );
@@ -841,6 +857,37 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Scheduled Test Reminder Popup (User Portal only) */}
+      {portal === 'user' && (
+        <ScheduledTestReminderPopup
+          user={displayedUser}
+          currentView={currentView}
+          currentPortal={portal}
+          onNavigate={(view) => navigateTo(view)}
+          onStartScheduledTest={handleStartScheduledTest}
+        />
+      )}
+
+      {/* Floating WhatsApp Support Button (User Portal only) */}
+      {portal === 'user' && (
+        <WhatsAppSupport
+          message="Hello! I need assistance with TypeMaster."
+          style={{
+            left: '20px',
+            bottom: '20px',
+            width: '220px',
+            justifyContent: 'center',
+            boxSizing: 'border-box'
+          }}
+        />
+      )}
+
+      {/* TypeMaster AI Assistant Floating Chatbot (Every User Portal view) */}
+      <TypeMasterChatbot
+        portal="user"
+        user={displayedUser}
+      />
     </div>
   );
 }

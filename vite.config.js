@@ -237,6 +237,7 @@ function geminiApiPlugin() {
           category = 'Random Text',
           difficulty = 'Medium',
           language = 'C',
+          medicalSubcategory = 'General Medical',
           durationSeconds = 60,
           excludeText = '',
           apiKey = '',
@@ -259,14 +260,17 @@ function geminiApiPlugin() {
         }
 
         const cleanLang = ALLOWED_LANGUAGES.includes(language) ? language : 'C';
+        const rawKey = (apiKey || '').trim() || req.headers['x-gemini-api-key'] || '';
+        const cleanApiKey = (rawKey && !rawKey.includes('•') && rawKey.length > 10) ? rawKey : '';
 
         const result = await generateTextWithGemini({
           category,
           difficulty,
           language: cleanLang,
+          medicalSubcategory,
           durationSeconds: Number(durationSeconds) || 60,
           excludeText,
-          apiKey: (apiKey || '').trim() || req.headers['x-gemini-api-key'] || '',
+          apiKey: cleanApiKey,
           model: model || getActiveGeminiConfig().model || 'gemini-3.5-flash'
         });
 

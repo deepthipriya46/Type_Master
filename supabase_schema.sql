@@ -131,6 +131,8 @@ CREATE TABLE IF NOT EXISTS public.scheduled_tests (
   status TEXT DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'live', 'completed', 'cancelled', 'draft')),
   max_participants INTEGER DEFAULT NULL,
   participants_count INTEGER DEFAULT 0,
+  target_audience_type TEXT DEFAULT 'all' CHECK (target_audience_type IN ('all', 'range_60_75', 'range_76_91', 'range_92_100')),
+  assigned_user_ids JSONB DEFAULT '[]'::jsonb,
   created_by TEXT,
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()),
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now())

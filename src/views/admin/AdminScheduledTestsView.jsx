@@ -70,11 +70,15 @@ export default function AdminScheduledTestsView({
     max_participants: '',
     starts_at: '',
     ends_at: '',
-    publication_status: 'published'
+    publication_status: 'published',
+    target_audience_type: 'all',
+    assigned_user_ids: []
   });
   const [formErrors, setFormErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  const [targetedUsersList, setTargetedUsersList] = useState([]);
+  const [isFetchingTargetUsers, setIsFetchingTargetUsers] = useState(false);
 
   // Preview Modal
   const [previewTest, setPreviewTest] = useState(null);
@@ -242,8 +246,11 @@ export default function AdminScheduledTestsView({
       max_participants: '',
       starts_at: defaultWindow.starts_at,
       ends_at: defaultWindow.ends_at,
-      publication_status: 'published'
+      publication_status: 'published',
+      target_audience_type: 'all',
+      assigned_user_ids: []
     });
+    setTargetedUsersList([]);
     setFormErrors({});
     setDrawerMode('create');
     setDrawerTab('basic');
@@ -251,7 +258,55 @@ export default function AdminScheduledTestsView({
     setIsDrawerOpen(true);
   };
 
+  // Calculate average accuracy for each registered user from actual test_logs
+  const fetchUsersByAccuracyRange = async (minAcc, maxAcc) => {
+    setIsFetchingTargetUsers(true);
+    try {
+      const filteredUsers = await supabaseService.fetchUsersByAccuracyRange(minAcc, maxAcc);
+      setTargetedUsersList(filteredUsers || []);
+      setForm((prev) => ({
+        ...prev,
+        assigned_user_ids: (filteredUsers || []).map((u) => u.id)
+      }));
+      return filteredUsers;
+    } catch (err) {
+      console.warn('Error fetching users by accuracy range:', err);
+      setTargetedUsersList([]);
+      return [];
+    } finally {
+      setIsFetchingTargetUsers(false);
+    }
+  };
+
+  const handleTargetAudienceChange = (targetType) => {
+    if (targetType === 'all') {
+      setForm((prev) => ({
+        ...prev,
+        target_audience_type: 'all',
+        assigned_user_ids: []
+      }));
+      setTargetedUsersList([]);
+      return;
+    }
+
+    setForm((prev) => ({
+      ...prev,
+      target_audience_type: targetType
+    }));
+
+    if (targetType === 'range_60_75') {
+      fetchUsersByAccuracyRange(60, 75);
+    } else if (targetType === 'range_76_91') {
+      fetchUsersByAccuracyRange(76, 91);
+    } else if (targetType === 'range_92_100') {
+      fetchUsersByAccuracyRange(92, 100);
+    }
+  };
+
   const handleOpenEditDrawer = (test) => {
+    const audienceType = test.target_audience_type || 'all';
+    const assignedIds = Array.isArray(test.assigned_user_ids) ? test.assigned_user_ids : [];
+
     setForm({
       title: test.title || '',
       description: test.description || '',
@@ -262,13 +317,25 @@ export default function AdminScheduledTestsView({
       max_participants: test.max_participants ? String(test.max_participants) : '',
       starts_at: test.starts_at ? toLocalDatetimeInput(test.starts_at) : '',
       ends_at: test.ends_at ? toLocalDatetimeInput(test.ends_at) : '',
-      publication_status: test.publication_status || 'published'
+      publication_status: test.publication_status || 'published',
+      target_audience_type: audienceType,
+      assigned_user_ids: assignedIds
     });
     setFormErrors({});
     setDrawerMode('edit');
     setDrawerTab('basic');
     setEditingTestId(test.id);
     setIsDrawerOpen(true);
+
+    if (audienceType === 'range_60_75') {
+      fetchUsersByAccuracyRange(60, 75);
+    } else if (audienceType === 'range_76_91') {
+      fetchUsersByAccuracyRange(76, 91);
+    } else if (audienceType === 'range_92_100') {
+      fetchUsersByAccuracyRange(92, 100);
+    } else {
+      setTargetedUsersList([]);
+    }
   };
 
   const handleValidateForm = () => {
@@ -315,7 +382,9 @@ export default function AdminScheduledTestsView({
         max_participants: form.max_participants ? Number(form.max_participants) : null,
         starts_at: new Date(form.starts_at).toISOString(),
         ends_at: new Date(form.ends_at).toISOString(),
-        publication_status: form.publication_status
+        publication_status: form.publication_status,
+        target_audience_type: form.target_audience_type || 'all',
+        assigned_user_ids: Array.isArray(form.assigned_user_ids) ? form.assigned_user_ids : []
       };
 
       if (drawerMode === 'create') {
@@ -1313,6 +1382,27 @@ export default function AdminScheduledTestsView({
                                 {t.description}
                               </div>
                             )}
+                            <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                              <span
+                                style={{
+                                  fontSize: '0.68rem',
+                                  fontWeight: 700,
+                                  padding: '1px 7px',
+                                  borderRadius: '10px',
+                                  background: t.target_audience_type === 'all' || !t.target_audience_type ? '#F1F5F9' : '#EFF6FF',
+                                  color: t.target_audience_type === 'all' || !t.target_audience_type ? '#475569' : '#1D4ED8',
+                                  border: `1px solid ${t.target_audience_type === 'all' || !t.target_audience_type ? '#E2E8F0' : '#BFDBFE'}`,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px'
+                                }}
+                              >
+                                {t.target_audience_type === 'range_60_75' && `🎯 60%–75% Acc (${(t.assigned_user_ids || []).length})`}
+                                {t.target_audience_type === 'range_76_91' && `⚡ 76%–91% Acc (${(t.assigned_user_ids || []).length})`}
+                                {t.target_audience_type === 'range_92_100' && `🏆 92%–100% Acc (${(t.assigned_user_ids || []).length})`}
+                                {(!t.target_audience_type || t.target_audience_type === 'all') && '👥 All Users'}
+                              </span>
+                            </div>
                           </td>
 
                           {/* Category Badge */}
@@ -1975,6 +2065,257 @@ export default function AdminScheduledTestsView({
                   )}
                 </div>
 
+                {/* Target Audience Selection & Live User Preview List */}
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', fontWeight: 700, color: '#334155' }}>
+                      <Users size={15} style={{ color: '#2563EB' }} />
+                      <span>Target Audience Selection</span>
+                      <span style={{ color: '#EF4444' }}>*</span>
+                    </label>
+                    {form.target_audience_type !== 'all' && (
+                      <span style={{ fontSize: '0.72rem', color: '#2563EB', fontWeight: 700, background: '#EFF6FF', padding: '2px 8px', borderRadius: '12px' }}>
+                        {form.assigned_user_ids.length} User{form.assigned_user_ids.length === 1 ? '' : 's'} Eligible
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 4 Target Audience Options */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+                    {[
+                      { id: 'all', label: 'Select All Users', desc: 'Assign test to every registered user', icon: '👥' },
+                      { id: 'range_60_75', label: 'Accuracy Range: 60% – 75%', desc: 'Target users with 60% - 75% accuracy', icon: '🎯' },
+                      { id: 'range_76_91', label: 'Accuracy Range: 76% – 91%', desc: 'Target users with 76% - 91% accuracy', icon: '⚡' },
+                      { id: 'range_92_100', label: 'Accuracy Range: 92% – 100%', desc: 'Target users with 92% - 100% accuracy', icon: '🏆' },
+                    ].map((opt) => {
+                      const isSelected = form.target_audience_type === opt.id;
+                      return (
+                        <div
+                          key={opt.id}
+                          onClick={() => handleTargetAudienceChange(opt.id)}
+                          style={{
+                            padding: '9px 11px',
+                            borderRadius: '10px',
+                            border: `1.5px solid ${isSelected ? '#2563EB' : '#E2E8F0'}`,
+                            background: isSelected ? '#EFF6FF' : '#FFFFFF',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '2px'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ fontSize: '0.85rem' }}>{opt.icon}</span>
+                              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: isSelected ? '#1D4ED8' : '#1E293B' }}>
+                                {opt.label}
+                              </span>
+                            </div>
+                            <input
+                              type="radio"
+                              name="target_audience"
+                              checked={isSelected}
+                              onChange={() => handleTargetAudienceChange(opt.id)}
+                              style={{ accentColor: '#2563EB', cursor: 'pointer' }}
+                            />
+                          </div>
+                          <div style={{ fontSize: '0.69rem', color: isSelected ? '#3B82F6' : '#64748B', paddingLeft: '20px' }}>
+                            {opt.desc}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Dynamic User Fetching & Live Display Section */}
+                  {form.target_audience_type === 'all' ? (
+                    <div
+                      style={{
+                        padding: '10px 12px',
+                        background: '#F0F9FF',
+                        border: '1px solid #BAE6FD',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        fontSize: '0.76rem',
+                        color: '#0369A1'
+                      }}
+                    >
+                      <Info size={16} style={{ flexShrink: 0 }} />
+                      <span>
+                        <strong>Universal Access:</strong> This test is assigned to every registered user and will be visible on all user portals.
+                      </span>
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        background: '#F8FAFC',
+                        border: '1px solid #E2E8F0',
+                        borderRadius: '10px',
+                        padding: '12px'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.76rem', fontWeight: 700, color: '#334155' }}>
+                          <span>Live Registered User Preview</span>
+                          <span
+                            style={{
+                              fontSize: '0.68rem',
+                              padding: '2px 6px',
+                              borderRadius: '6px',
+                              background: '#E2E8F0',
+                              color: '#475569'
+                            }}
+                          >
+                            {isFetchingTargetUsers ? 'Querying...' : `${targetedUsersList.length} Qualified`}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (form.target_audience_type === 'range_60_75') fetchUsersByAccuracyRange(60, 75);
+                            else if (form.target_audience_type === 'range_76_91') fetchUsersByAccuracyRange(76, 91);
+                            else if (form.target_audience_type === 'range_92_100') fetchUsersByAccuracyRange(92, 100);
+                          }}
+                          disabled={isFetchingTargetUsers}
+                          title="Refresh user accuracy in real-time"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            background: '#FFFFFF',
+                            border: '1px solid #CBD5E1',
+                            borderRadius: '6px',
+                            padding: '3px 8px',
+                            fontSize: '0.7rem',
+                            fontWeight: 600,
+                            color: '#475569',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <RotateCw size={11} className={isFetchingTargetUsers ? 'spin' : ''} />
+                          <span>Re-check Logs</span>
+                        </button>
+                      </div>
+
+                      {isFetchingTargetUsers ? (
+                        <div style={{ textAlign: 'center', padding: '24px 10px', color: '#64748B', fontSize: '0.78rem' }}>
+                          <RotateCw size={18} className="spin" style={{ margin: '0 auto 6px', color: '#2563EB' }} />
+                          <div>Computing average accuracy from real test logs...</div>
+                        </div>
+                      ) : targetedUsersList.length === 0 ? (
+                        <div
+                          style={{
+                            textAlign: 'center',
+                            padding: '16px 12px',
+                            background: '#FFFFFF',
+                            borderRadius: '8px',
+                            border: '1px dashed #CBD5E1',
+                            color: '#64748B',
+                            fontSize: '0.76rem'
+                          }}
+                        >
+                          <AlertCircle size={20} style={{ margin: '0 auto 4px', color: '#F59E0B' }} />
+                          <div style={{ fontWeight: 700, color: '#334155' }}>No registered users in this accuracy range yet</div>
+                          <div style={{ marginTop: '2px', fontSize: '0.72rem', color: '#94A3B8' }}>
+                            Users will be assigned once their average accuracy falls within this range.
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            maxHeight: '180px',
+                            overflowY: 'auto',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '6px',
+                            background: '#FFFFFF',
+                            padding: '8px',
+                            borderRadius: '8px',
+                            border: '1px solid #E2E8F0'
+                          }}
+                        >
+                          {targetedUsersList.map((targetUser) => (
+                            <div
+                              key={targetUser.id}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: '8px 10px',
+                                background: '#F8FAFC',
+                                borderRadius: '6px',
+                                border: '1px solid #F1F5F9'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                                <div
+                                  style={{
+                                    width: '28px',
+                                    height: '28px',
+                                    borderRadius: '50%',
+                                    background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)',
+                                    color: '#FFFFFF',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 700,
+                                    flexShrink: 0
+                                  }}
+                                >
+                                  {(targetUser.full_name || targetUser.email || 'U').charAt(0).toUpperCase()}
+                                </div>
+                                <div style={{ minWidth: 0 }}>
+                                  <div
+                                    style={{
+                                      fontSize: '0.78rem',
+                                      fontWeight: 700,
+                                      color: '#1E293B',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap'
+                                    }}
+                                  >
+                                    {targetUser.full_name}
+                                  </div>
+                                  <div
+                                    style={{
+                                      fontSize: '0.68rem',
+                                      color: '#64748B',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap'
+                                    }}
+                                  >
+                                    {targetUser.email}
+                                  </div>
+                                </div>
+                              </div>
+                              <span
+                                style={{
+                                  padding: '3px 8px',
+                                  borderRadius: '6px',
+                                  fontSize: '0.72rem',
+                                  fontWeight: 700,
+                                  background: targetUser.avgAccuracy >= 92 ? '#ECFDF5' : targetUser.avgAccuracy >= 76 ? '#EFF6FF' : '#FEF3C7',
+                                  color: targetUser.avgAccuracy >= 92 ? '#059669' : targetUser.avgAccuracy >= 76 ? '#2563EB' : '#D97706',
+                                  border: `1px solid ${targetUser.avgAccuracy >= 92 ? '#A7F3D0' : targetUser.avgAccuracy >= 76 ? '#BFDBFE' : '#FDE68A'}`,
+                                  flexShrink: 0
+                                }}
+                              >
+                                {targetUser.avgAccuracy}% Avg Acc
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* Publication Status Radios matching Reference Mockup */}
                 <div>
                   <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: '#334155', marginBottom: '8px' }}>
@@ -2126,6 +2467,18 @@ export default function AdminScheduledTestsView({
                   <div style={{ fontSize: '0.78rem', color: '#475569', marginBottom: '10px' }}>
                     <div><strong>Starts:</strong> {form.starts_at ? new Date(form.starts_at).toLocaleString() : 'Not set'}</div>
                     <div><strong>Ends:</strong> {form.ends_at ? new Date(form.ends_at).toLocaleString() : 'Not set'}</div>
+                    <div>
+                      <strong>Target Audience:</strong>{' '}
+                      {form.target_audience_type === 'all'
+                        ? 'All Registered Users (Universal Access)'
+                        : `${
+                            form.target_audience_type === 'range_60_75'
+                              ? 'Accuracy Range: 60% – 75%'
+                              : form.target_audience_type === 'range_76_91'
+                              ? 'Accuracy Range: 76% – 91%'
+                              : 'Accuracy Range: 92% – 100%'
+                          } (${form.assigned_user_ids.length} Qualified Typist${form.assigned_user_ids.length === 1 ? '' : 's'})`}
+                    </div>
                   </div>
 
                   <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>

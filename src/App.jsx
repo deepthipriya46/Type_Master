@@ -425,6 +425,15 @@ export default function App() {
       return;
     }
 
+    // Verify audience eligibility for targeted tests
+    if (test.target_audience_type && test.target_audience_type !== 'all') {
+      const isEligible = Array.isArray(test.assigned_user_ids) && test.assigned_user_ids.includes(activeTypistUser?.id);
+      if (!isEligible) {
+        alert('You are not eligible to take this targeted test.');
+        return;
+      }
+    }
+
     const durationSec = test.duration || (test.duration_minutes ? test.duration_minutes * 60 : 60);
 
     setTestSettings({

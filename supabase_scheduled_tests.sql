@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS public.scheduled_tests (
   status TEXT DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'live', 'completed', 'cancelled', 'draft')),
   max_participants INTEGER DEFAULT NULL,
   participants_count INTEGER DEFAULT 0,
+  target_audience_type TEXT DEFAULT 'all' CHECK (target_audience_type IN ('all', 'range_60_75', 'range_76_91', 'range_92_100')),
+  assigned_user_ids JSONB DEFAULT '[]'::jsonb,
   retake_policy TEXT DEFAULT 'best_attempt' CHECK (retake_policy IN ('best_attempt', 'latest_attempt', 'single_attempt')),
   scoring_formula TEXT DEFAULT 'standard' CHECK (scoring_formula IN ('standard', 'net_wpm', 'accuracy_weighted')),
   created_by TEXT,

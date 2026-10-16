@@ -31,14 +31,17 @@ export default function TypingTestView({
   onNavigate
 }) {
   const [duration, setDuration] = useState(initialSettings.duration || 60);
+  const [customMinutes, setCustomMinutes] = useState(4);
   const [difficulty, setDifficulty] = useState(initialSettings.difficulty || 'Easy');
   const [category, setCategory] = useState(initialSettings.category || 'Random Text');
   const [language, setLanguage] = useState(initialSettings.language || 'C');
+  const [medicalSubcategory, setMedicalSubcategory] = useState(initialSettings.medicalSubcategory || 'Medical Billing & Claims');
 
   const isCustomMode = duration === 'custom' || duration === 0;
 
   const [promptText, setPromptText] = useState('Loading typing prompt...');
   const [promptSource, setPromptSource] = useState('gemini_api');
+  const [generatedCategory, setGeneratedCategory] = useState('');
   const [isLoadingPrompt, setIsLoadingPrompt] = useState(false);
   const [generationError, setGenerationError] = useState(null);
 
@@ -95,7 +98,15 @@ export default function TypingTestView({
 
   // Dynamic Gemini-powered passage generation with request-cancellation & error-handling
   const fetchDynamicPassage = useCallback(
-    async (cat = category, diff = difficulty, lang = language, dur = duration, exclude = promptText) => {
+    async (
+      cat = category,
+      diff = difficulty,
+      lang = language,
+      dur = duration,
+      exclude = promptText,
+      medSub = medicalSubcategory,
+      customMin = customMinutes
+    ) => {
       // Cancel previous in-flight request
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -107,7 +118,13 @@ export default function TypingTestView({
       setIsLoadingPrompt(true);
       setGenerationError(null);
 
-      const targetSec = typeof dur === 'number' ? dur : 60;
+      let targetSec = 60;
+      if (dur === 'custom' || dur === 0) {
+        const m = typeof customMin === 'number' ? customMin : customMinutes;
+        targetSec = Math.round(Math.max(0.5, Math.min(15, m)) * 60);
+      } else if (typeof dur === 'number') {
+        targetSec = dur;
+      }
 
       try {
         const geminiConfig = await supabaseService.getGeminiConfig();
@@ -121,6 +138,7 @@ export default function TypingTestView({
             category: cat,
             difficulty: diff,
             language: cat === 'Programming' ? lang : undefined,
+            medicalSubcategory: cat === 'Medical' ? (medSub || medicalSubcategory || 'Medical Billing & Claims') : undefined,
             durationSeconds: targetSec,
             excludeText: exclude || promptText || '',
             apiKey: geminiConfig?.apiKey || '',
@@ -141,6 +159,9 @@ export default function TypingTestView({
         if (data.success && data.text) {
           setPromptText(data.text);
           setPromptSource(data.source || 'gemini_api');
+          if (data.generatedCategory) {
+            setGeneratedCategory(data.generatedCategory);
+          }
           setGenerationError(null);
 
           // Completely reset typing engine state for the new passage:
@@ -169,8 +190,11 @@ export default function TypingTestView({
           keystrokesRef.current = [];
           setResultModalData(null);
 
+          if (arenaRef.current) {
+            arenaRef.current.scrollTop = 0;
+          }
           if (inputRef.current) {
-            inputRef.current.focus();
+            inputRef.current.focus({ preventScroll: true });
           }
         } else {
           throw new Error(data.error || 'Unable to generate passage.');
@@ -193,13 +217,55 @@ export default function TypingTestView({
         }
       }
     },
-    [category, difficulty, language, duration, isCustomMode, promptText]
+    [category, difficulty, language, duration, isCustomMode, promptText, medicalSubcategory, customMinutes]
   );
 
   // New Text button triggers dynamic category-aware generation
   const handleNewTextClick = useCallback(() => {
-    fetchDynamicPassage(category, difficulty, language, duration, promptText);
-  }, [fetchDynamicPassage, category, difficulty, language, duration, promptText]);
+    fetchDynamicPassage(category, difficulty, language, duration, promptText, medicalSubcategory, customMinutes);
+  }, [fetchDynamicPassage, category, difficulty, language, duration, promptText, medicalSubcategory, customMinutes]);
+
+  // Auto-scroll the active cursor/word within the passage container to keep current typing line visible
+  useEffect(() => {
+    if (!arenaRef.current) return;
+    const arena = arenaRef.current;
+
+    if (typedInput.length === 0) {
+      arena.scrollTop = 0;
+      return;
+    }
+
+    const rafId = requestAnimationFrame(() => {
+      if (!arenaRef.current) return;
+      const activeElem =
+        arena.querySelector('.typing-cursor') ||
+        arena.querySelector('.active-word') ||
+        arena.querySelector('.typing-char.pending');
+
+      if (!activeElem) return;
+
+      const arenaRect = arena.getBoundingClientRect();
+      const elemRect = activeElem.getBoundingClientRect();
+
+      const relativeTop = elemRect.top - arenaRect.top;
+      const relativeBottom = elemRect.bottom - arenaRect.top;
+      const arenaHeight = arena.clientHeight;
+
+      // Keep active line within visible portion (middle/lower-middle) without scrolling entire page
+      const bottomThreshold = arenaHeight - 65;
+      const topThreshold = 45;
+
+      if (relativeBottom > bottomThreshold) {
+        const targetScroll = arena.scrollTop + (relativeTop - arenaHeight * 0.45);
+        arena.scrollTo({ top: targetScroll, behavior: 'smooth' });
+      } else if (relativeTop < topThreshold) {
+        const targetScroll = Math.max(0, arena.scrollTop + (relativeTop - arenaHeight * 0.35));
+        arena.scrollTo({ top: targetScroll, behavior: 'smooth' });
+      }
+    });
+
+    return () => cancelAnimationFrame(rafId);
+  }, [typedInput]);
 
   useEffect(() => {
     if (initialSettings.customPrompt || initialSettings.promptText || initialSettings.content) {
@@ -252,8 +318,11 @@ export default function TypingTestView({
     setCompletedSessionData(null);
     setViewingMistakes(false);
 
+    if (arenaRef.current) {
+      arenaRef.current.scrollTop = 0;
+    }
     if (inputRef.current) {
-      inputRef.current.focus();
+      inputRef.current.focus({ preventScroll: true });
     }
   }, [duration, isCustomMode, handleNewTextClick]);
 
@@ -261,10 +330,10 @@ export default function TypingTestView({
     resetTest(false);
   }, [duration, resetTest]);
 
-  // Focus input automatically
+  // Focus input automatically without scrolling
   const handleArenaClick = () => {
     if (inputRef.current) {
-      inputRef.current.focus();
+      inputRef.current.focus({ preventScroll: true });
     }
   };
 
@@ -736,10 +805,11 @@ export default function TypingTestView({
         }}
       >
         {/* Duration Selectors */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155' }}>Test Duration</span>
           {[
             { label: '1 min', val: 60 },
+            { label: '2 min', val: 120 },
             { label: '3 min', val: 180 },
             { label: '5 min', val: 300 },
             { label: 'Custom', val: 'custom' }
@@ -764,14 +834,47 @@ export default function TypingTestView({
                 setKeyFeedback(null);
                 setLiveWpm(0);
                 setLiveAccuracy(100);
-                fetchDynamicPassage(category, difficulty, language, item.val);
-                if (inputRef.current) inputRef.current.focus();
+                fetchDynamicPassage(category, difficulty, language, item.val, '', medicalSubcategory, customMinutes);
+                if (inputRef.current) inputRef.current.focus({ preventScroll: true });
               }}
               style={duration === item.val ? { background: '#2563eb', color: '#ffffff' } : {}}
             >
               {item.label}
             </button>
           ))}
+
+          {/* Inline Custom Duration Input (0.5 to 15 minutes) */}
+          {duration === 'custom' && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginLeft: '4px' }}>
+              <input
+                type="number"
+                min="0.5"
+                max="15"
+                step="0.5"
+                value={customMinutes}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  const validVal = isNaN(val) ? 1 : Math.max(0.5, Math.min(15, val));
+                  setCustomMinutes(validVal);
+                  fetchDynamicPassage(category, difficulty, language, 'custom', promptText, medicalSubcategory, validVal);
+                }}
+                style={{
+                  width: '54px',
+                  padding: '4px 6px',
+                  borderRadius: '8px',
+                  border: '1.5px solid #2563eb',
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  color: '#1d4ed8',
+                  background: '#eff6ff',
+                  textAlign: 'center',
+                  outline: 'none'
+                }}
+                title="Enter custom test duration in minutes (0.5 to 15 min)"
+              />
+              <span style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 600 }}>min</span>
+            </div>
+          )}
         </div>
 
         {/* Difficulty Selectors */}
@@ -781,7 +884,7 @@ export default function TypingTestView({
             className={`pill-btn diff-easy ${difficulty === 'Easy' ? 'active' : ''}`}
             onClick={() => {
               setDifficulty('Easy');
-              fetchDynamicPassage(category, 'Easy', language, duration);
+              fetchDynamicPassage(category, 'Easy', language, duration, promptText, medicalSubcategory, customMinutes);
             }}
           >
             Easy
@@ -790,7 +893,7 @@ export default function TypingTestView({
             className={`pill-btn diff-med ${difficulty === 'Medium' ? 'active' : ''}`}
             onClick={() => {
               setDifficulty('Medium');
-              fetchDynamicPassage(category, 'Medium', language, duration);
+              fetchDynamicPassage(category, 'Medium', language, duration, promptText, medicalSubcategory, customMinutes);
             }}
           >
             Medium
@@ -799,14 +902,14 @@ export default function TypingTestView({
             className={`pill-btn diff-hard ${difficulty === 'Hard' ? 'active' : ''}`}
             onClick={() => {
               setDifficulty('Hard');
-              fetchDynamicPassage(category, 'Hard', language, duration);
+              fetchDynamicPassage(category, 'Hard', language, duration, promptText, medicalSubcategory, customMinutes);
             }}
           >
             Hard
           </button>
         </div>
 
-        {/* Category & Language Dropdown */}
+        {/* Category & Subcategory Dropdown */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155' }}>Text Category</span>
           <select
@@ -814,7 +917,11 @@ export default function TypingTestView({
             onChange={(e) => {
               const newCat = e.target.value;
               setCategory(newCat);
-              fetchDynamicPassage(newCat, difficulty, language, duration);
+              const targetMedSub = newCat === 'Medical' ? (medicalSubcategory || 'Medical Billing & Claims') : medicalSubcategory;
+              if (newCat === 'Medical' && !medicalSubcategory) {
+                setMedicalSubcategory('Medical Billing & Claims');
+              }
+              fetchDynamicPassage(newCat, difficulty, language, duration, promptText, targetMedSub, customMinutes);
             }}
             style={{
               padding: '6px 14px',
@@ -833,7 +940,43 @@ export default function TypingTestView({
             <option value="Literature">Literature</option>
             <option value="Programming">Programming</option>
             <option value="Science & Nature">Science & Nature</option>
+            <option value="Medical">Medical</option>
           </select>
+
+          {/* Medical Subcategory Selector - Only when category is Medical */}
+          {category === 'Medical' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0284c7' }}>Subcategory</span>
+              <select
+                value={medicalSubcategory || 'Medical Billing & Claims'}
+                onChange={(e) => {
+                  const newSub = e.target.value;
+                  setMedicalSubcategory(newSub);
+                  fetchDynamicPassage('Medical', difficulty, language, duration, promptText, newSub, customMinutes);
+                }}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '10px',
+                  border: '1.5px solid #0284c7',
+                  fontSize: '0.84rem',
+                  fontWeight: 700,
+                  background: '#f0f9ff',
+                  color: '#0369a1',
+                  cursor: 'pointer'
+                }}
+                title="Select Medical Subcategory for practice"
+              >
+                <option value="Medical Billing & Claims">Medical Billing & Claims</option>
+                <option value="Medical Terminology">Medical Terminology</option>
+                <option value="ICD-10-CM & CPT Coding">ICD-10-CM & CPT Coding</option>
+                <option value="Insurance Verification">Insurance Verification</option>
+                <option value="Patient Data Entry">Patient Data Entry</option>
+                <option value="Payment Posting & Accounts Receivable">Payment Posting & Accounts Receivable</option>
+                <option value="Medical Documentation">Medical Documentation</option>
+                <option value="Numbers & Special Characters">Numbers & Special Characters</option>
+              </select>
+            </div>
+          )}
 
           {/* Programming Language Selector - Only when category is Programming */}
           {category === 'Programming' && (
@@ -844,7 +987,7 @@ export default function TypingTestView({
                 onChange={(e) => {
                   const newLang = e.target.value;
                   setLanguage(newLang);
-                  fetchDynamicPassage('Programming', difficulty, newLang, duration);
+                  fetchDynamicPassage('Programming', difficulty, newLang, duration, promptText, medicalSubcategory, customMinutes);
                 }}
                 style={{
                   padding: '6px 14px',
@@ -1053,6 +1196,29 @@ export default function TypingTestView({
                 Restart
               </button>
             </div>
+          </div>
+
+          {/* Active Passage Info Banner */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 10px', marginBottom: '8px', fontSize: '0.8rem', color: '#64748b' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', padding: '3px 10px', borderRadius: '12px', fontWeight: 700, fontSize: '0.78rem' }}>
+                <Sparkles size={12} color="#2563eb" />
+                {category === 'Random Text' && generatedCategory
+                  ? `${generatedCategory}`
+                  : (category === 'Medical' ? `Medical: ${medicalSubcategory}` : category)}
+              </span>
+              <span style={{ background: '#f8fafc', color: '#475569', border: '1px solid #e2e8f0', padding: '3px 8px', borderRadius: '8px', fontWeight: 600, fontSize: '0.75rem' }}>
+                {difficulty}
+              </span>
+              <span style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+                {promptText && promptText !== 'Loading typing prompt...' ? `${promptText.trim().split(/\s+/).filter(Boolean).length} words` : ''}
+              </span>
+            </div>
+            {promptSource && (
+              <span style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                {promptSource === 'gemini_api' ? '✨ Gemini AI Generation' : '📚 Verified Practice Bank'}
+              </span>
+            )}
           </div>
 
           {/* Interactive Text Display Arena */}

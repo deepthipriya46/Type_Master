@@ -16,14 +16,14 @@ export function AuthProvider({ children }) {
     let profileData = null;
     let fetchError = null;
 
-    // 1. Live Supabase Query: profiles table
+    // 1. Live Supabase Query: users table (authoritative database table)
     if (supabaseService.isConfigured()) {
       try {
         const { data, error } = await supabaseService.supabase
-          .from('profiles')
+          .from('users')
           .select('*')
           .eq('id', userId)
-          .single();
+          .maybeSingle();
 
         if (!error && data) {
           profileData = data;
@@ -32,22 +32,6 @@ export function AuthProvider({ children }) {
         }
       } catch (err) {
         fetchError = err;
-      }
-
-      // Fallback query to users table if profiles table is not present
-      if (!profileData && fetchError) {
-        try {
-          const { data } = await supabaseService.supabase
-            .from('users')
-            .select('*')
-            .eq('id', userId)
-            .single();
-          if (data) {
-            profileData = data;
-          }
-        } catch {
-          // ignore fallback error
-        }
       }
     }
 
@@ -179,22 +163,7 @@ export function AuthProvider({ children }) {
     if (supabaseService.isConfigured()) {
       channel = supabaseService.supabase
         .channel('user-profile-sync')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
-          (payload) => {
-            if (payload.new) {
-              const updated = {
-                ...payload.new,
-                displayName: payload.new.display_name || payload.new.username || user.displayName,
-                display_name: payload.new.display_name || payload.new.username || user.displayName,
-                is_premium: Boolean(payload.new.is_premium)
-              };
-              setUser(prev => ({ ...prev, ...updated }));
-              supabaseService.setCurrentUser({ ...user, ...updated });
-            }
-          }
-        )
+
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'users', filter: `id=eq.${user.id}` },

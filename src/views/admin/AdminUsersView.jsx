@@ -105,10 +105,6 @@ export default function AdminUsersView({
     if (supabaseService.isConfigured()) {
       try {
         subChannel = supabaseService.supabase
-          .channel('admin-users-live-feed')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
-            if (isMounted) refreshUsers();
-          })
           .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
             if (isMounted) refreshUsers();
           })

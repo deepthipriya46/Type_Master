@@ -29,14 +29,18 @@ export default function AdminAchievementsView() {
   const fetchGlobalLeaderboard = async () => {
     setLoading(true);
     try {
-      // Fetch aggregate performance metrics for all registered users
+      // Fetch aggregate performance metrics for all registered users using valid schema columns
       let { data: leaderboardData, error } = await supabase
         .from('users')
         .select(`
           id,
-          full_name,
+          username,
           email,
-          status,
+          avatar_url,
+          best_wpm,
+          avg_wpm,
+          accuracy,
+          tests_completed,
           test_logs (
             wpm,
             accuracy,
@@ -45,21 +49,10 @@ export default function AdminAchievementsView() {
         `);
 
       if (error) {
-        // Fallback if schema has username instead of full_name or status column is omitted
+        // Fallback without joined test_logs if relationship fails
         const fallbackRes = await supabase
           .from('users')
-          .select(`
-            id,
-            username,
-            email,
-            status,
-            avatar_url,
-            test_logs (
-              wpm,
-              accuracy,
-              created_at
-            )
-          `);
+          .select('id, username, email, avatar_url, best_wpm, avg_wpm, accuracy, tests_completed');
         if (!fallbackRes.error && fallbackRes.data) {
           leaderboardData = fallbackRes.data;
           error = null;
@@ -67,7 +60,7 @@ export default function AdminAchievementsView() {
       }
 
       if (error) {
-        console.error('Error fetching leaderboard:', error);
+        console.warn('Supabase direct leaderboard fetch notice in admin achievements, using service layer:', error.message || error);
         const fallbackList = adminService.getLeaderboardRankings(timeframe);
         setLeaderboardList(fallbackList || []);
         return;

@@ -35,6 +35,7 @@ export default function DashboardView({
 
   const handleStartTestClick = (forceNew = false) => {
     let sec = 60;
+    if (selectedDuration === '2 min') sec = 120;
     if (selectedDuration === '3 min') sec = 180;
     if (selectedDuration === '5 min') sec = 300;
     if (selectedDuration === 'Custom') sec = 'custom';
@@ -54,7 +55,7 @@ export default function DashboardView({
     let isMounted = true;
     const fetchUpcoming = async () => {
       try {
-        const tests = await supabaseService.fetchScheduledTests({ publishedOnly: true });
+        const tests = await supabaseService.fetchEligibleScheduledTests(user?.id);
         if (isMounted && Array.isArray(tests)) {
           const now = new Date();
           const filtered = tests
@@ -201,7 +202,7 @@ export default function DashboardView({
           <div className="hero-controls">
             {/* Duration Pills */}
             <div className="pill-group">
-              {['1 min', '3 min', '5 min', 'Custom'].map((dur) => (
+              {['1 min', '2 min', '3 min', '5 min', 'Custom'].map((dur) => (
                 <button
                   key={dur}
                   className={`pill-btn ${selectedDuration === dur ? 'active' : ''}`}

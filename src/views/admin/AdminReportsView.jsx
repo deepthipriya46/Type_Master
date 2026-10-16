@@ -77,13 +77,6 @@ export default function AdminReportsView({ dateRange, onDateRangeChange }) {
         .channel('admin-live-feed')
         .on(
           'postgres_changes',
-          { event: '*', schema: 'public', table: 'test_sessions' },
-          () => {
-            loadReports();
-          }
-        )
-        .on(
-          'postgres_changes',
           { event: '*', schema: 'public', table: 'test_logs' },
           () => {
             loadReports();
@@ -91,21 +84,7 @@ export default function AdminReportsView({ dateRange, onDateRangeChange }) {
         )
         .on(
           'postgres_changes',
-          { event: '*', schema: 'public', table: 'profiles' },
-          () => {
-            loadReports();
-          }
-        )
-        .on(
-          'postgres_changes',
           { event: '*', schema: 'public', table: 'users' },
-          () => {
-            loadReports();
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'feedback' },
           () => {
             loadReports();
           }

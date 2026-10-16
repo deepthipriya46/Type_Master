@@ -1295,9 +1295,10 @@ body {
   border: 1px solid #e2e8f0;
   border-radius: 14px;
   padding: 24px;
-  min-height: 170px;
-  max-height: 220px;
+  min-height: 180px;
+  max-height: 240px;
   overflow-y: auto;
+  scroll-behavior: smooth;
   font-family: var(--font-mono);
   font-size: 1.25rem;
   line-height: 1.85;
@@ -1305,6 +1306,8 @@ body {
   position: relative;
   user-select: none;
   cursor: text;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .typing-arena:focus-within {
@@ -1313,11 +1316,13 @@ body {
 }
 
 .hidden-type-input {
-  position: absolute;
+  position: fixed;
   opacity: 0;
   pointer-events: none;
-  left: 0;
-  top: 0;
+  left: -9999px;
+  top: -9999px;
+  width: 1px;
+  height: 1px;
 }
 
 /* Word & Character styling */

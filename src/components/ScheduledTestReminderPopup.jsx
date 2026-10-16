@@ -41,7 +41,7 @@ export default function ScheduledTestReminderPopup({
   // Load published tests and check user attempts
   const loadReminderTests = useCallback(async () => {
     try {
-      const published = await supabaseService.fetchScheduledTests({ publishedOnly: true });
+      const published = await supabaseService.fetchEligibleScheduledTests(user?.id);
       if (!Array.isArray(published)) return;
 
       setTests(published);

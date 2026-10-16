@@ -18,7 +18,7 @@ import {
   Info,
   Check
 } from 'lucide-react';
-import { supabaseService } from '../services/supabaseService';
+import { supabase, supabaseService } from '../services/supabaseService';
 
 export default function ScheduledTestsView({
   user,
@@ -34,12 +34,45 @@ export default function ScheduledTestsView({
   const [userAttemptsMap, setUserAttemptsMap] = useState({});
   const [currentTime, setCurrentTime] = useState(Date.now());
 
-  // Load published tests from Supabase
+  // Modify active scheduled test fetching query so tests are strictly visible only to eligible users
+  const fetchEligibleScheduledTests = useCallback(async (currentUserId) => {
+    let rawTests = [];
+
+    if (supabaseService.isConfigured() && supabase) {
+      try {
+        const { data: tests, error } = await supabase
+          .from('scheduled_tests')
+          .select('*')
+          .eq('publication_status', 'published');
+
+        if (!error && Array.isArray(tests)) {
+          rawTests = tests;
+        }
+      } catch (err) {
+        console.warn('Supabase fetchEligibleScheduledTests notice:', err);
+      }
+    }
+
+    if (rawTests.length === 0) {
+      const allLocal = await supabaseService.fetchScheduledTests({ publishedOnly: true });
+      rawTests = allLocal || [];
+    }
+
+    // Filter tests visible to current user
+    const visibleTests = rawTests.filter((test) => {
+      if (!test.target_audience_type || test.target_audience_type === 'all') return true;
+      return test.assigned_user_ids && test.assigned_user_ids.includes(currentUserId);
+    });
+
+    return supabaseService._formatScheduledTests(visibleTests);
+  }, []);
+
+  // Load eligible published tests for current user
   const loadTests = useCallback(async (manual = false) => {
     if (manual) setIsRefreshing(true);
     setLoading(true);
     try {
-      const data = await supabaseService.fetchScheduledTests({ publishedOnly: true });
+      const data = await fetchEligibleScheduledTests(user?.id);
       setTests(data || []);
 
       // Check user attempts for these tests
@@ -59,15 +92,38 @@ export default function ScheduledTestsView({
       setLoading(false);
       if (manual) setIsRefreshing(false);
     }
-  }, [user?.id]);
+  }, [user?.id, fetchEligibleScheduledTests]);
 
-  // Realtime subscription: updates automatically when admin creates/edits a test!
+  // Ensure real-time synchronization using Supabase Realtime subscriptions (supabase.channel('scheduled_tests'))
   useEffect(() => {
     loadTests();
+
+    let channel = null;
+    if (supabaseService.isConfigured() && supabase) {
+      try {
+        channel = supabase
+          .channel('scheduled_tests')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'scheduled_tests' },
+            () => {
+              loadTests();
+            }
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('Supabase realtime scheduled_tests channel notice:', err);
+      }
+    }
+
     const unsubscribe = supabaseService.subscribeScheduledTests(() => {
       loadTests();
     });
+
     return () => {
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
       if (typeof unsubscribe === 'function') unsubscribe();
     };
   }, [loadTests]);

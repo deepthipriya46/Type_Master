@@ -252,17 +252,20 @@ export function scalePromptToDuration(prompt, targetDuration = '1m') {
   if (!prompt || !prompt.text) return prompt;
 
   const currentWords = prompt.text.trim().split(/\s+/).length;
-  let targetMin = 50;
-  let targetMax = 80;
+  let targetMin = 100;
+  let targetMax = 150;
 
-  if (targetDuration === '3m') {
-    targetMin = 180;
-    targetMax = 250;
+  if (targetDuration === '2m') {
+    targetMin = 200;
+    targetMax = 300;
+  } else if (targetDuration === '3m') {
+    targetMin = 300;
+    targetMax = 450;
   } else if (targetDuration === '5m') {
-    targetMin = 350;
-    targetMax = 500;
+    targetMin = 500;
+    targetMax = 750;
   } else if (targetDuration === 'custom') {
-    targetMin = 600;
+    targetMin = 500;
     targetMax = 750;
   }
 
@@ -288,6 +291,14 @@ export function scalePromptToDuration(prompt, targetDuration = '1m') {
       'Algorithmic optimization reduces asymptotic complexity and prevents memory leaks during high-throughput execution.',
       'Asynchronous event queues and non-blocking I/O allow modern servers to handle thousands of concurrent requests seamlessly.',
       'Consistent code reviews and strict static typing standards ensure determinism across enterprise microservice stacks.'
+    ],
+    'Medical': [
+      'Cardiovascular hemodynamics and systemic perfusion sustain cellular oxygenation across vital organ systems.',
+      'Accurate ICD-10-CM diagnostic coding and CPT procedural documentation ensure legitimate healthcare reimbursement workflows.',
+      'Health insurance verification requires confirming active policy coverage, copay requirements, and annual deductible balances.',
+      'Patient demographic registration demands precise entry of full legal names, primary subscriber identifiers, and dates of birth.',
+      'Medical billing specialists review CMS-1500 claim forms to eliminate coding discrepancies before electronic transmission to payers.',
+      'Pharmacokinetics governs drug absorption, distribution, metabolic transformation, and renal elimination pathways.'
     ],
     'Quotes': [
       'Discipline is the enduring bridge connecting genuine ambition with lasting accomplishment across every creative domain.',
@@ -480,6 +491,7 @@ class SupabaseService {
     this.url = '';
     this.anonKey = '';
     this.isOnline = false;
+    this._feedbackTableAvailable = false;
     this.initClient();
     this.purgeStaleMockData();
     this.ensureDefaultAdmin();
@@ -798,9 +810,13 @@ class SupabaseService {
 
   // --- STORAGE HELPERS ---
   _getLocal(key, fallback) {
-    if (typeof localStorage === 'undefined') return fallback;
+    const rawKey = key.startsWith('typemaster_') ? key : `typemaster_${key}`;
+    if (typeof localStorage === 'undefined') {
+      if (!this._memoryStore) this._memoryStore = {};
+      return this._memoryStore[rawKey] !== undefined ? this._memoryStore[rawKey] : fallback;
+    }
     try {
-      const data = localStorage.getItem(`typemaster_${key}`);
+      const data = localStorage.getItem(rawKey) || (key.startsWith('typemaster_') ? localStorage.getItem(key.replace(/^typemaster_/, '')) : null);
       return data ? JSON.parse(data) : fallback;
     } catch {
       return fallback;
@@ -808,9 +824,14 @@ class SupabaseService {
   }
 
   _setLocal(key, val) {
-    if (typeof localStorage === 'undefined') return;
+    const rawKey = key.startsWith('typemaster_') ? key : `typemaster_${key}`;
+    if (typeof localStorage === 'undefined') {
+      if (!this._memoryStore) this._memoryStore = {};
+      this._memoryStore[rawKey] = val;
+      return;
+    }
     try {
-      localStorage.setItem(`typemaster_${key}`, JSON.stringify(val));
+      localStorage.setItem(rawKey, JSON.stringify(val));
     } catch (e) {
       console.warn('Storage set error', e);
     }
@@ -866,30 +887,7 @@ class SupabaseService {
             const userId = `usr_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
             const freshUser = createFreshUser(userId, cleanUsername, trimmedEmail);
 
-            // Upsert into profiles
-            try {
-              await this._withTimeout(
-                this.supabase.from('profiles').upsert({
-                  id: freshUser.id,
-                  username: freshUser.username,
-                  display_name: freshUser.username,
-                  email: freshUser.email,
-                  avatar_url: freshUser.avatar_url,
-                  role: freshUser.role || 'user',
-                  status: 'Active',
-                  best_wpm: 0,
-                  avg_wpm: 0,
-                  accuracy: 0,
-                  tests_completed: 0,
-                  is_premium: false
-                }),
-                4000
-              );
-            } catch (e) {
-              console.warn('Direct profiles table insert note:', e);
-            }
-
-            // Also upsert users table for backward compatibility
+            // Upsert directly into users table
             try {
               await this._withTimeout(
                 this.supabase.from('users').upsert({
@@ -935,27 +933,7 @@ class SupabaseService {
         const userId = data.user?.id || `user_${Date.now()}`;
         const freshUser = createFreshUser(userId, cleanUsername, trimmedEmail);
 
-        // Upsert user into Supabase profiles table
-        try {
-          await this._withTimeout(this.supabase.from('profiles').upsert({
-            id: freshUser.id,
-            username: freshUser.username,
-            display_name: freshUser.username,
-            email: freshUser.email,
-            avatar_url: freshUser.avatar_url,
-            role: freshUser.role || 'user',
-            status: 'Active',
-            best_wpm: 0,
-            avg_wpm: 0,
-            accuracy: 0,
-            tests_completed: 0,
-            is_premium: false
-          }), 4000);
-        } catch (e) {
-          console.warn('Supabase profiles upsert notice:', e);
-        }
-
-        // Also upsert users table
+        // Upsert user into Supabase users table
         try {
           await this._withTimeout(this.supabase.from('users').upsert({
             id: freshUser.id,
@@ -969,7 +947,7 @@ class SupabaseService {
             is_premium: false
           }), 4000);
         } catch (e) {
-          console.warn('Supabase users fallback notice:', e);
+          console.warn('Supabase users upsert notice:', e);
         }
 
         const accounts = this._getLocal('users_registry', []);
@@ -1030,27 +1008,13 @@ class SupabaseService {
         if (!error && data?.user) {
           let profile = null;
           try {
-            const profileRes = await this._withTimeout(
-              this.supabase.from('profiles').select('*').eq('id', data.user.id).single(),
+            const userRes = await this._withTimeout(
+              this.supabase.from('users').select('*').eq('id', data.user.id).maybeSingle(),
               3000
             );
-            if (!profileRes.error && profileRes.data) {
-              profile = profileRes.data;
-            }
+            profile = userRes?.data;
           } catch (e) {
-            console.warn('Profile fetch note:', e);
-          }
-
-          if (!profile) {
-            try {
-              const userRes = await this._withTimeout(
-                this.supabase.from('users').select('*').eq('id', data.user.id).single(),
-                3000
-              );
-              profile = userRes?.data;
-            } catch (e) {
-              // fallback
-            }
+            // fallback
           }
 
           const rawUsername = data.user.user_metadata?.username || profile?.username || profile?.display_name || 'Typist';
@@ -1067,10 +1031,10 @@ class SupabaseService {
             role: isUserAdmin ? 'admin' : (profile?.role || 'user')
           };
 
-          // If recognized as admin, ensure profile role is admin
+          // If recognized as admin, ensure user role is admin
           if (isUserAdmin && profile?.role !== 'admin') {
             try {
-              await this.supabase.from('profiles').update({ role: 'admin' }).eq('id', data.user.id);
+              await this.supabase.from('users').update({ role: 'admin' }).eq('id', data.user.id);
             } catch (e) {
               // ignore
             }
@@ -1245,6 +1209,14 @@ class SupabaseService {
     return { success: true, user: mockUser };
   }
 
+  isAdmin(user) {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    const email = (user.email || '').toLowerCase().trim();
+    if (email === 'admin@typemaster.com' || email.startsWith('admin@')) return true;
+    return false;
+  }
+
   // ==========================================================
   // MULTI-ADMIN CREATION & RBAC LIFECYCLE
   // ==========================================================
@@ -1281,26 +1253,7 @@ class SupabaseService {
 
         const userId = data?.user?.id || `admin_${Date.now()}`;
 
-        // Upsert into Supabase profiles with role = 'admin'
-        await this._withTimeout(
-          this.supabase.from('profiles').upsert({
-            id: userId,
-            username: cleanName,
-            display_name: cleanName,
-            email: cleanEmail,
-            avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanName)}`,
-            role: 'admin',
-            status: 'Active',
-            best_wpm: 0,
-            avg_wpm: 0,
-            accuracy: 0,
-            tests_completed: 0,
-            is_premium: true
-          }),
-          4000
-        );
-
-        // Also upsert users table
+        // Upsert into Supabase users table with role = 'admin'
         try {
           await this._withTimeout(
             this.supabase.from('users').upsert({
@@ -1311,10 +1264,10 @@ class SupabaseService {
               role: 'admin',
               is_premium: true
             }),
-            3000
+            4000
           );
         } catch (e) {
-          // ignore
+          console.warn('Admin users upsert note:', e);
         }
 
         createdUser = {
@@ -1387,7 +1340,7 @@ class SupabaseService {
     // Update in Supabase
     if (this.isConfigured()) {
       try {
-        await this.supabase.from('profiles').update({ role: 'user' }).eq('email', cleanEmail);
+        await this.supabase.from('users').update({ role: 'user' }).eq('email', cleanEmail);
       } catch (e) {
         console.warn('Revoke Supabase admin note:', e);
       }
@@ -1484,7 +1437,7 @@ class SupabaseService {
         const data = await statusRes.json();
         if (data.isConfigured) {
           return {
-            apiKey: data.maskedKey || '••••••••••••••••',
+            apiKey: '', // Backend already has the active key; never send masked bullets as an API key
             maskedKey: data.maskedKey,
             model: data.model || 'gemini-3.5-flash',
             isConfigured: true
@@ -1523,6 +1476,11 @@ class SupabaseService {
 
     if (!apiKey && typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) {
       apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    }
+
+    // Ensure masked bullets are never returned as an apiKey
+    if (apiKey && (apiKey.includes('•') || apiKey.length < 10)) {
+      apiKey = '';
     }
 
     return {
@@ -1703,10 +1661,7 @@ class SupabaseService {
     this._setLocal(`test_logs_${currentUser.id}`, []);
     if (this.isConfigured()) {
       try {
-        await Promise.all([
-          this.supabase.from('test_logs').delete().eq('user_id', currentUser.id),
-          this.supabase.from('test_sessions').delete().eq('user_id', currentUser.id)
-        ]);
+        await this.supabase.from('test_logs').delete().eq('user_id', currentUser.id);
       } catch (e) {
         console.warn('Supabase clear logs note:', e);
       }
@@ -1955,7 +1910,7 @@ class SupabaseService {
         let role = 'user';
         let displayName = session.user.user_metadata?.username || session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Typist';
         try {
-          const { data: prof } = await this.supabase.from('profiles').select('*').eq('id', session.user.id).single();
+          const { data: prof } = await this.supabase.from('users').select('*').eq('id', session.user.id).maybeSingle();
           if (prof) {
             displayName = prof.display_name || prof.username || displayName;
             role = prof.role || 'user';
@@ -2202,25 +2157,7 @@ class SupabaseService {
     // 7. Push to live Supabase asynchronously if configured
     if (this.isConfigured()) {
       try {
-        // Upsert into profiles table
-        try {
-          await this._withTimeout(this.supabase.from('profiles').upsert({
-            id: userId,
-            username: updatedUser.username,
-            display_name: updatedUser.displayName || updatedUser.username,
-            email: updatedUser.email || '',
-            avatar_url: updatedUser.avatar_url || '',
-            best_wpm: bestWpm,
-            avg_wpm: avgWpm,
-            accuracy: avgAccuracy,
-            tests_completed: testsCompleted,
-            updated_at: now.toISOString()
-          }), 4000);
-        } catch (e) {
-          console.warn('Profiles upsert note:', e);
-        }
-
-        // Upsert users table for backward compatibility
+        // Upsert users table directly
         try {
           await this._withTimeout(this.supabase.from('users').upsert({
             id: userId,
@@ -2239,97 +2176,44 @@ class SupabaseService {
 
         // UPSERT STREAK
         try {
+          const streakDate = updatedStreak.last_active_date || now.toISOString().split('T')[0];
           await this._withTimeout(this.supabase.from('streaks').upsert({
             user_id: userId,
             current_streak: newStreak,
             longest_streak: updatedStreak.longest_streak,
-            last_active_date: todayStr
+            last_active_date: streakDate
           }), 4000);
         } catch (e) {
           console.warn('Streaks upsert note:', e);
         }
 
-        // Insert into test_sessions table
+        // Insert into test_logs table directly matching database schema columns
         try {
-          await this._withTimeout(this.supabase.from('test_sessions').insert([{
+          const durationSec = Math.max(1, Math.round(Number(duration) || Number(newLog.durationSeconds) || 60));
+          const testLogPayload = {
             user_id: userId,
-            wpm: newLog.wpm,
-            raw_wpm: newLog.raw_wpm,
-            accuracy: newLog.accuracy,
-            duration: duration,
-            errors: newLog.errors,
-            characters: newLog.characters,
-            correct_characters: newLog.correct_characters,
-            wrong_characters: newLog.wrong_characters,
-            missed_characters: newLog.missed_characters,
-            extra_characters: newLog.extra_characters,
-            category,
-            difficulty,
+            wpm: Math.round(newLog.wpm),
+            raw_wpm: Math.round(newLog.raw_wpm || newLog.wpm),
+            accuracy: Math.round(newLog.accuracy * 10) / 10,
+            duration: durationSec,
+            errors: Math.max(0, newLog.errors),
+            characters: Math.max(0, newLog.characters),
+            category: category || 'Random Text',
+            difficulty: difficulty || 'Easy',
             result_badge: resultBadge,
             is_valid: isValid,
-            mistake_details: payload.mistakeDetails || payload.mistake_details || [],
-            mistake_stats: payload.mistakeStats || payload.mistake_stats || null,
-            prompt_text: payload.promptText || payload.prompt_text || '',
-            typed_input: payload.typedInput || payload.typed_input || '',
-            created_at: now.toISOString()
-          }]), 4000);
-        } catch (e) {
-          console.warn('test_sessions insert note:', e);
-        }
-
-        // Insert into test_logs table with resilient schema fallback
-        try {
-          const extendedPayload = {
-            user_id: userId,
-            wpm: newLog.wpm,
-            raw_wpm: newLog.raw_wpm,
-            accuracy: newLog.accuracy,
-            duration: newLog.duration,
-            errors: newLog.errors,
-            characters: newLog.characters,
-            category,
-            difficulty,
-            result_badge: resultBadge,
-            is_valid: isValid,
-            prompt_text: newLog.prompt_text,
-            typed_input: newLog.typed_input,
-            mistake_details: newLog.mistake_details,
-            mistake_stats: newLog.mistake_stats,
-            correct_characters: newLog.correct_characters,
-            wrong_characters: newLog.wrong_characters,
-            missed_characters: newLog.missed_characters,
-            extra_characters: newLog.extra_characters,
             created_at: now.toISOString()
           };
+
           let { data: insertedRow, error: insErr } = await this._withTimeout(
-            this.supabase.from('test_logs').insert([extendedPayload]).select().maybeSingle(),
+            this.supabase.from('test_logs').insert([testLogPayload]).select().maybeSingle(),
             4000
           );
+
           if (insErr) {
-            console.warn('test_logs insert with full schema note, trying core columns:', insErr.message);
-            // Fallback to core columns if extended columns not yet added to remote database
-            const corePayload = {
-              user_id: userId,
-              wpm: newLog.wpm,
-              raw_wpm: newLog.raw_wpm,
-              accuracy: newLog.accuracy,
-              duration: newLog.duration,
-              errors: newLog.errors,
-              characters: newLog.characters,
-              category,
-              difficulty,
-              result_badge: resultBadge,
-              is_valid: isValid,
-              created_at: now.toISOString()
-            };
-            const fallbackRes = await this._withTimeout(
-              this.supabase.from('test_logs').insert([corePayload]).select().maybeSingle(),
-              4000
-            );
-            if (!fallbackRes.error && fallbackRes.data?.id) {
-              insertedRow = fallbackRes.data;
-            }
+            console.warn('test_logs insert notice:', insErr.message);
           }
+
           if (insertedRow?.id) {
             const oldId = newLog.id;
             newLog.id = insertedRow.id;
@@ -2513,33 +2397,22 @@ class SupabaseService {
     // 1. Supabase live fetch if configured
     if (this.isConfigured()) {
       try {
-        const [profileRes, userRes, streakRes, sessionsRes, logsRes] = await this._withTimeout(
+        const [userRes, streakRes, logsRes] = await this._withTimeout(
           Promise.all([
-            Promise.resolve(this.supabase.from('profiles').select('*').eq('id', userId).maybeSingle()).catch(() => ({ data: null })),
             Promise.resolve(this.supabase.from('users').select('*').eq('id', userId).maybeSingle()).catch(() => ({ data: null })),
             Promise.resolve(this.supabase.from('streaks').select('*').eq('user_id', userId).maybeSingle()).catch(() => ({ data: null })),
-            Promise.resolve(this.supabase.from('test_sessions').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(200)).catch(() => ({ data: [] })),
-            Promise.resolve(this.supabase.from('test_logs').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(100)).catch(() => ({ data: [] }))
+            Promise.resolve(this.supabase.from('test_logs').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(200)).catch(() => ({ data: [] }))
           ]),
           4000
         );
 
-        const profileRow = profileRes?.data;
         const userRow = userRes?.data;
         const streakRow = streakRes?.data;
-        const liveSessions = Array.isArray(sessionsRes?.data) ? sessionsRes.data : [];
         const liveLogs = Array.isArray(logsRes?.data) ? logsRes.data : [];
+        const combinedLive = [...liveLogs];
 
-        // Combine test_sessions and test_logs, prioritizing test_sessions for rich telemetry
-        const combinedLive = [...liveSessions];
-        liveLogs.forEach(lr => {
-          if (!combinedLive.some(s => s.id === lr.id || (s.created_at && lr.created_at && Math.abs(new Date(s.created_at).getTime() - new Date(lr.created_at).getTime()) < 5000))) {
-            combinedLive.push(lr);
-          }
-        });
-
-        if (profileRow || userRow || combinedLive.length > 0) {
-          const effectiveUser = profileRow || userRow || this._getLocal(`user_${userId}`, currentUser);
+        if (userRow || combinedLive.length > 0) {
+          const effectiveUser = userRow || this._getLocal(`user_${userId}`, currentUser);
           const formattedRecent = combinedLive.map(l => {
             let resBadge = l.result || l.result_badge;
             if ((resBadge === 'Invalid' || resBadge === 'Flagged') && (l.characters > 0 || l.wpm > 0) && l.wpm <= 250) {
@@ -2726,14 +2599,18 @@ class SupabaseService {
 
     if (this.isConfigured() && this.supabase) {
       try {
-        // Query users table and joined test_logs
+        // Query users table and joined test_logs directly using valid columns
         const res = await this.supabase
           .from('users')
           .select(`
             id,
-            full_name,
+            username,
             email,
-            status,
+            avatar_url,
+            best_wpm,
+            avg_wpm,
+            accuracy,
+            tests_completed,
             test_logs (
               wpm,
               accuracy,
@@ -2742,20 +2619,10 @@ class SupabaseService {
           `);
 
         if (res.error) {
-          // Fallback if schema uses username instead of full_name or status is omitted
+          // Fallback if joined logs relation is not exposed
           const fallbackRes = await this.supabase
             .from('users')
-            .select(`
-              id,
-              username,
-              email,
-              avatar_url,
-              test_logs (
-                wpm,
-                accuracy,
-                created_at
-              )
-            `);
+            .select('id, username, email, avatar_url, best_wpm, avg_wpm, accuracy, tests_completed');
           if (!fallbackRes.error && fallbackRes.data) {
             leaderboardData = fallbackRes.data;
           } else {
@@ -2907,19 +2774,8 @@ class SupabaseService {
     const userId = targetUserId || currentUser?.id;
     if (!userId) return null;
 
-    // 1. Live Supabase update: profiles and users table
+    // 1. Live Supabase update: users table
     if (this.isConfigured()) {
-      try {
-        await this._withTimeout(
-          this.supabase.from('profiles').update({
-            is_premium: Boolean(isPremium),
-            updated_at: new Date().toISOString()
-          }).eq('id', userId),
-          4000
-        );
-      } catch (e) {
-        console.warn('Supabase profiles tier update note:', e);
-      }
       try {
         await this._withTimeout(
           this.supabase.from('users').update({
@@ -3254,10 +3110,9 @@ class SupabaseService {
     if (sampleNames.includes(name)) return true;
     return false;
   }
-
   async fetchFeedbackLive() {
     let list = [];
-    if (this.isConfigured()) {
+    if (this.isConfigured() && this._feedbackTableAvailable === true) {
       try {
         const { data, error } = await this._withTimeout(
           this.supabase.from('feedback').select('*').order('created_at', { ascending: false }),
@@ -3282,9 +3137,11 @@ class SupabaseService {
             created_at: d.created_at,
             date: d.created_at ? new Date(d.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Recent'
           }));
+        } else {
+          this._feedbackTableAvailable = false;
         }
       } catch (err) {
-        console.warn('Supabase live feedback fetch note:', err);
+        this._feedbackTableAvailable = false;
       }
     }
 
@@ -3599,23 +3456,7 @@ class SupabaseService {
         const realId = data?.user?.id || adminId;
         newAdmin.id = realId;
 
-        // Upsert into profiles table with role: 'admin'
-        await this._withTimeout(
-          this.supabase.from('profiles').upsert({
-            id: realId,
-            username: cleanName,
-            display_name: cleanName,
-            email: cleanEmail,
-            role: 'admin',
-            status: 'Active',
-            is_premium: true,
-            avatar_url: newAdmin.avatar_url,
-            created_at: newAdmin.created_at
-          }),
-          4000
-        );
-
-        // Also upsert users table
+        // Upsert into users table directly
         try {
           await this._withTimeout(
             this.supabase.from('users').upsert({
@@ -3658,28 +3499,13 @@ class SupabaseService {
     let liveRecords = [];
     if (this.isConfigured()) {
       try {
-        // Query canonical test_sessions first
-        const sessionRes = await this._withTimeout(
-          Promise.resolve(this.supabase.from('test_sessions').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(300)),
+        const logsRes = await this._withTimeout(
+          Promise.resolve(this.supabase.from('test_logs').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(200)),
           4000
         ).catch(() => ({ data: [] }));
 
-        if (Array.isArray(sessionRes?.data) && sessionRes.data.length > 0) {
-          liveRecords = sessionRes.data;
-        }
-
-        // Also check test_logs for supplementary records
-        const logsRes = await this._withTimeout(
-          Promise.resolve(this.supabase.from('test_logs').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(100)),
-          3000
-        ).catch(() => ({ data: [] }));
-
         if (Array.isArray(logsRes?.data) && logsRes.data.length > 0) {
-          logsRes.data.forEach(lr => {
-            if (!liveRecords.some(s => s.id === lr.id || (s.created_at && lr.created_at && Math.abs(new Date(s.created_at).getTime() - new Date(lr.created_at).getTime()) < 5000))) {
-              liveRecords.push(lr);
-            }
-          });
+          liveRecords = logsRes.data;
         }
       } catch (err) {
         console.warn('fetchUserTestLogs live note:', err);
@@ -3831,21 +3657,21 @@ class SupabaseService {
       try {
         const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(attemptId);
         if (isUuid) {
-          const { data: sessionRow } = await this._withTimeout(
-            Promise.resolve(this.supabase.from('test_sessions').select('*').eq('id', attemptId).maybeSingle()),
+          const { data: logRow } = await this._withTimeout(
+            Promise.resolve(this.supabase.from('test_logs').select('*').eq('id', attemptId).maybeSingle()),
             3000
           ).catch(() => ({ data: null }));
 
-          if (sessionRow) {
-            attempt = { ...(attempt || {}), ...sessionRow };
+          if (logRow) {
+            attempt = { ...(attempt || {}), ...logRow };
           }
         }
 
-        // If prompt_text is still missing, query user's recent sessions
+        // If prompt_text is still missing, query user's recent logs
         if ((!attempt?.prompt_text && !attempt?.promptText) && userId) {
-          const { data: sessionRows } = await this._withTimeout(
+          const { data: logRows } = await this._withTimeout(
             Promise.resolve(this.supabase
-              .from('test_sessions')
+              .from('test_logs')
               .select('*')
               .eq('user_id', userId)
               .order('created_at', { ascending: false })
@@ -3853,8 +3679,8 @@ class SupabaseService {
             3000
           ).catch(() => ({ data: [] }));
 
-          if (Array.isArray(sessionRows)) {
-            const match = sessionRows.find(s =>
+          if (Array.isArray(logRows)) {
+            const match = logRows.find(s =>
               s.id === attemptId ||
               (attempt?.created_at && Math.abs(new Date(s.created_at).getTime() - new Date(attempt.created_at).getTime()) < 10000) ||
               (attempt && s.wpm === attempt.wpm && s.errors === attempt.errors)
@@ -3963,11 +3789,12 @@ class SupabaseService {
     // 3. Supabase Realtime Channel
     if (this.isConfigured()) {
       try {
-        this.supabase.channel('admin-live-feed').send({
-          type: 'broadcast',
-          event: type,
-          payload
-        });
+        const ch = this.supabase.channel('admin-live-feed');
+        if (typeof ch.httpSend === 'function') {
+          ch.httpSend({ type: 'broadcast', event: type, payload });
+        } else {
+          ch.send({ type: 'broadcast', event: type, payload });
+        }
       } catch {
         // fallback
       }
@@ -3994,11 +3821,12 @@ class SupabaseService {
     // 3. Supabase Realtime Channel
     if (this.isConfigured()) {
       try {
-        this.supabase.channel('user-profile-sync').send({
-          type: 'broadcast',
-          event: type,
-          payload: { userId, updates }
-        });
+        const ch = this.supabase.channel('user-profile-sync');
+        if (typeof ch.httpSend === 'function') {
+          ch.httpSend({ type: 'broadcast', event: type, payload: { userId, updates } });
+        } else {
+          ch.send({ type: 'broadcast', event: type, payload: { userId, updates } });
+        }
       } catch {
         // fallback
       }
@@ -4120,6 +3948,26 @@ class SupabaseService {
     }
   }
 
+  _formatScheduledTests(rawList) {
+    return (rawList || []).map((t) => {
+      const computedStatus = this.computeTestScheduleStatus(t);
+      const durMinutes = Number(t.duration_minutes) || Math.round((Number(t.duration) || 60) / 60) || 1;
+      return {
+        ...t,
+        target_audience_type: t.target_audience_type || 'all',
+        assigned_user_ids: Array.isArray(t.assigned_user_ids) ? t.assigned_user_ids : [],
+        duration_minutes: durMinutes,
+        duration: Number(t.duration) || (durMinutes * 60),
+        computedStatus,
+        isLive: computedStatus === 'live',
+        isUpcoming: computedStatus === 'upcoming',
+        isCompleted: computedStatus === 'completed',
+        isDraft: computedStatus === 'draft',
+        isCancelled: computedStatus === 'cancelled'
+      };
+    });
+  }
+
   async fetchScheduledTests(filter = {}) {
     let rawList = [];
 
@@ -4144,34 +3992,163 @@ class SupabaseService {
       }
     }
 
-    // 2. Fallback to local persistent registry if table query was empty or offline
-    if (rawList.length === 0) {
-      const localRegistry = this._getLocal('typemaster_scheduled_tests', []);
-      rawList = localRegistry;
-    }
+    // 2. Merge remote results with local registry to ensure complete resilience
+    const localRegistry = this._getLocal('typemaster_scheduled_tests', []);
+    const mergedMap = new Map();
+    localRegistry.forEach(t => mergedMap.set(t.id, t));
+    rawList.forEach(t => {
+      const existing = mergedMap.get(t.id) || {};
+      mergedMap.set(t.id, {
+        ...existing,
+        ...t,
+        target_audience_type: t.target_audience_type || existing.target_audience_type || 'all',
+        assigned_user_ids: t.assigned_user_ids || existing.assigned_user_ids || []
+      });
+    });
+    const combinedList = Array.from(mergedMap.values());
 
     // Compute live status and clean values for every test
-    const processed = rawList.map((t) => {
-      const computedStatus = this.computeTestScheduleStatus(t);
-      const durMinutes = Number(t.duration_minutes) || Math.round((Number(t.duration) || 60) / 60) || 1;
-      return {
-        ...t,
-        duration_minutes: durMinutes,
-        duration: Number(t.duration) || (durMinutes * 60),
-        computedStatus,
-        isLive: computedStatus === 'live',
-        isUpcoming: computedStatus === 'upcoming',
-        isCompleted: computedStatus === 'completed',
-        isDraft: computedStatus === 'draft',
-        isCancelled: computedStatus === 'cancelled'
-      };
-    });
+    const processed = this._formatScheduledTests(combinedList);
+
+    if (filter.userId) {
+      return processed.filter((t) => {
+        if (filter.publishedOnly && t.publication_status !== 'published') return false;
+        if (!t.target_audience_type || t.target_audience_type === 'all') return true;
+        return Array.isArray(t.assigned_user_ids) && t.assigned_user_ids.includes(filter.userId);
+      });
+    }
 
     if (filter.publishedOnly) {
       return processed.filter(t => t.publication_status === 'published');
     }
 
     return processed;
+  }
+
+  // Active scheduled test fetching query strictly visible only to eligible users
+  async fetchEligibleScheduledTests(currentUserId) {
+    let rawTests = [];
+
+    if (this.isConfigured() && this.supabase) {
+      try {
+        const { data: tests, error } = await this._withTimeout(
+          this.supabase
+            .from('scheduled_tests')
+            .select('*')
+            .eq('publication_status', 'published')
+            .order('starts_at', { ascending: false }),
+          4000
+        );
+
+        if (!error && Array.isArray(tests)) {
+          rawTests = tests;
+        }
+      } catch (err) {
+        console.warn('Supabase fetchEligibleScheduledTests note:', err);
+      }
+    }
+
+    const localRegistry = this._getLocal('typemaster_scheduled_tests', []);
+    const mergedMap = new Map();
+    localRegistry.filter(t => t.publication_status === 'published').forEach(t => mergedMap.set(t.id, t));
+    rawTests.forEach(t => {
+      const existing = mergedMap.get(t.id) || {};
+      mergedMap.set(t.id, {
+        ...existing,
+        ...t,
+        target_audience_type: t.target_audience_type || existing.target_audience_type || 'all',
+        assigned_user_ids: t.assigned_user_ids || existing.assigned_user_ids || []
+      });
+    });
+    const combinedTests = Array.from(mergedMap.values());
+
+    // Filter tests visible to current user
+    const visibleTests = combinedTests.filter((test) => {
+      if (!test.target_audience_type || test.target_audience_type === 'all') return true;
+      return Array.isArray(test.assigned_user_ids) && test.assigned_user_ids.includes(currentUserId);
+    });
+
+    return this._formatScheduledTests(visibleTests);
+  }
+
+  // Calculate average accuracy for each registered user from actual test_logs
+  async fetchUsersByAccuracyRange(minAcc, maxAcc) {
+    let usersList = [];
+
+    if (this.isConfigured() && this.supabase) {
+      try {
+        // Query users with joined test_logs
+        let { data: users, error } = await this.supabase
+          .from('users')
+          .select('id, username, email, test_logs(accuracy)');
+
+        // Schema fallback: if foreign key relation is not joined in PostgREST, query separately
+        if (error) {
+          const [usersRes, logsRes] = await Promise.all([
+            this.supabase.from('users').select('id, username, email'),
+            this.supabase.from('test_logs').select('user_id, accuracy')
+          ]);
+
+          if (usersRes?.data && Array.isArray(usersRes.data)) {
+            const logsMap = {};
+            (logsRes?.data || []).forEach((l) => {
+              if (l.user_id) {
+                if (!logsMap[l.user_id]) logsMap[l.user_id] = [];
+                logsMap[l.user_id].push(l);
+              }
+            });
+
+            users = usersRes.data.map((u) => ({
+              ...u,
+              test_logs: logsMap[u.id] || []
+            }));
+            error = null;
+          }
+        }
+
+        if (!error && Array.isArray(users)) {
+          usersList = users;
+        }
+      } catch (err) {
+        console.warn('Supabase fetchUsersByAccuracyRange notice:', err);
+      }
+    }
+
+    // Local registry fallback for real registered accounts
+    if (usersList.length === 0) {
+      const localUsers = this._getLocal('users_registry', []);
+      usersList = localUsers.map((u) => {
+        const logs = this._getLocal(`test_logs_${u.id}`, []);
+        return {
+          id: u.id,
+          full_name: u.full_name || u.displayName || u.username || (u.email ? u.email.split('@')[0] : 'Typist'),
+          email: u.email,
+          test_logs: logs.map((l) => ({ accuracy: l.accuracy }))
+        };
+      });
+    }
+
+    // Filter users whose computed average accuracy falls strictly within [minAcc, maxAcc]
+    const filteredUsers = usersList
+      .filter((user) => {
+        const logs = user.test_logs || [];
+        if (logs.length === 0) return false; // Exclude users with no test logs
+
+        const avgAccuracy = logs.reduce((acc, log) => acc + (Number(log.accuracy) || 0), 0) / logs.length;
+        return avgAccuracy >= minAcc && avgAccuracy <= maxAcc;
+      })
+      .map((user) => {
+        const logs = user.test_logs || [];
+        const avgAccuracy = logs.reduce((acc, log) => acc + (Number(log.accuracy) || 0), 0) / logs.length;
+        return {
+          id: user.id,
+          full_name: user.full_name || user.username || user.displayName || (user.email ? user.email.split('@')[0] : 'Typist'),
+          email: user.email || `${user.username || 'user'}@typemaster.local`,
+          avgAccuracy: Math.round(avgAccuracy * 10) / 10
+        };
+      });
+
+    return filteredUsers; // Returns real registered user accounts only
   }
 
   async fetchScheduledTestById(id) {
@@ -4182,12 +4159,17 @@ class SupabaseService {
 
   async createScheduledTest(testPayload) {
     const now = new Date();
-    const id = `st_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const id = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+      ? crypto.randomUUID()
+      : `st_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const durationMinutes = Number(testPayload.duration_minutes) || Math.round((Number(testPayload.duration) || 60) / 60) || 1;
     const durationSeconds = durationMinutes * 60;
 
     const startsAt = testPayload.starts_at ? new Date(testPayload.starts_at).toISOString() : now.toISOString();
     const endsAt = testPayload.ends_at ? new Date(testPayload.ends_at).toISOString() : new Date(now.getTime() + 86400000).toISOString();
+
+    const targetAudienceType = testPayload.target_audience_type || 'all';
+    const assignedUserIds = Array.isArray(testPayload.assigned_user_ids) ? testPayload.assigned_user_ids : [];
 
     const record = {
       id,
@@ -4204,6 +4186,8 @@ class SupabaseService {
       status: testPayload.publication_status === 'draft' ? 'draft' : 'scheduled',
       max_participants: testPayload.max_participants ? Number(testPayload.max_participants) : null,
       participants_count: 0,
+      target_audience_type: targetAudienceType,
+      assigned_user_ids: assignedUserIds,
       created_by: testPayload.created_by || this.getCurrentUser()?.email || 'admin@typemaster.com',
       created_at: now.toISOString(),
       updated_at: now.toISOString()

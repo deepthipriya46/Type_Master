@@ -29,119 +29,10 @@ export default function AdminAchievementsView() {
   const fetchGlobalLeaderboard = async () => {
     setLoading(true);
     try {
-      // Fetch aggregate performance metrics for all registered users using valid schema columns
-      let { data: leaderboardData, error } = await supabase
-        .from('users')
-        .select(`
-          id,
-          username,
-          email,
-          avatar_url,
-          best_wpm,
-          avg_wpm,
-          accuracy,
-          tests_completed,
-          test_logs (
-            wpm,
-            accuracy,
-            created_at
-          )
-        `);
-
-      if (error) {
-        // Fallback without joined test_logs if relationship fails
-        const fallbackRes = await supabase
-          .from('users')
-          .select('id, username, email, avatar_url, best_wpm, avg_wpm, accuracy, tests_completed');
-        if (!fallbackRes.error && fallbackRes.data) {
-          leaderboardData = fallbackRes.data;
-          error = null;
-        }
-      }
-
-      if (error) {
-        console.warn('Supabase direct leaderboard fetch notice in admin achievements, using service layer:', error.message || error);
-        const fallbackList = adminService.getLeaderboardRankings(timeframe);
-        setLeaderboardList(fallbackList || []);
-        return;
-      }
-
-      // Filter logs by timeframe if specified
-      const now = Date.now();
-      const filterLogs = (logs) => {
-        if (!timeframe || timeframe.toLowerCase() === 'all-time' || timeframe.toLowerCase() === 'all') return logs;
-        const days = timeframe.toLowerCase() === 'today' ? 1 : timeframe.toLowerCase() === 'weekly' ? 7 : 30;
-        const cutoff = now - days * 24 * 60 * 60 * 1000;
-        return logs.filter(l => {
-          const t = l.created_at ? new Date(l.created_at).getTime() : 0;
-          return t >= cutoff;
-        });
-      };
-
-      // Only registered typists (exclude anonymous temporary guests)
-      const registeredUsers = (leaderboardData || []).filter(u => u && !String(u.id).startsWith('guest_'));
-
-      // Calculate user performance metrics dynamically
-      const computedLeaderboard = registeredUsers.map((user) => {
-        const logs = filterLogs(user.test_logs || []);
-        const testsCompleted = logs.length;
-
-        if (testsCompleted === 0) {
-          return {
-            id: user.id,
-            user: user.full_name || user.displayName || user.username || 'Typist',
-            name: user.full_name || user.displayName || user.username || 'Typist',
-            email: user.email,
-            wpm: 0,
-            accuracy: 0, // Set accuracy to 0% (not default 98%) when no tests taken
-            testsCompleted: 0,
-            tier: 'Unranked',
-            status: user.status || 'Active'
-          };
-        }
-
-        // Compute peak speed and average accuracy for active typists
-        const maxWpm = Math.max(...logs.map((l) => Number(l.wpm) || 0));
-        const avgAccuracy = (
-          logs.reduce((acc, l) => acc + (Number(l.accuracy) || 0), 0) / testsCompleted
-        ).toFixed(1);
-
-        let tier = 'Bronze';
-        if (maxWpm >= 80) tier = 'Master';
-        else if (maxWpm >= 50) tier = 'Gold';
-        else if (maxWpm >= 30) tier = 'Silver';
-
-        return {
-          id: user.id,
-          user: user.full_name || user.displayName || user.username || 'Typist',
-          name: user.full_name || user.displayName || user.username || 'Typist',
-          email: user.email,
-          wpm: maxWpm,
-          accuracy: parseFloat(avgAccuracy),
-          testsCompleted,
-          tier,
-          status: user.status || 'Active'
-        };
-      });
-
-      // Sort: Active users first, then by WPM (desc), then Accuracy (desc), then Tests (desc)
-      const sortedLeaderboard = computedLeaderboard.sort((a, b) => {
-        if (a.testsCompleted === 0 && b.testsCompleted > 0) return 1;
-        if (a.testsCompleted > 0 && b.testsCompleted === 0) return -1;
-        if (b.wpm !== a.wpm) return b.wpm - a.wpm;
-        if (b.accuracy !== a.accuracy) return b.accuracy - a.accuracy;
-        return b.testsCompleted - a.testsCompleted;
-      });
-
-      // Assign sequential dynamic ranks (#1, #2, #3, ...)
-      const rankedUsers = sortedLeaderboard.map((user, index) => ({
-        ...user,
-        rank: index + 1
-      }));
-
-      setLeaderboardList(rankedUsers);
+      const list = await supabaseService.fetchGlobalLeaderboard(timeframe);
+      setLeaderboardList(list || []);
     } catch (err) {
-      console.error('Error in fetchGlobalLeaderboard:', err);
+      console.warn('Admin achievements leaderboard error:', err);
       const fallbackList = adminService.getLeaderboardRankings(timeframe);
       setLeaderboardList(fallbackList || []);
     } finally {
@@ -151,6 +42,54 @@ export default function AdminAchievementsView() {
 
   useEffect(() => {
     fetchGlobalLeaderboard();
+
+    // In-window custom event listeners
+    const handleSync = () => {
+      fetchGlobalLeaderboard();
+    };
+    window.addEventListener('typemaster-test-logged', handleSync);
+    window.addEventListener('typemaster-admin-feed', handleSync);
+    window.addEventListener('typemaster-profile-sync', handleSync);
+
+    // Cross-tab BroadcastChannels
+    let historyBc, adminBc;
+    try {
+      historyBc = new BroadcastChannel('typemaster_history_sync');
+      historyBc.onmessage = () => fetchGlobalLeaderboard();
+      adminBc = new BroadcastChannel('typemaster_admin_feed');
+      adminBc.onmessage = () => fetchGlobalLeaderboard();
+    } catch {
+      // fallback
+    }
+
+    // Supabase Realtime channel
+    let realtimeChannel = null;
+    if (supabaseService.isConfigured() && supabaseService.supabase?.channel) {
+      try {
+        realtimeChannel = supabaseService.supabase
+          .channel('admin-achievements-live-feed')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
+            fetchGlobalLeaderboard();
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'test_logs' }, () => {
+            fetchGlobalLeaderboard();
+          })
+          .subscribe();
+      } catch (err) {
+        console.warn('Realtime admin achievements subscription notice:', err);
+      }
+    }
+
+    return () => {
+      window.removeEventListener('typemaster-test-logged', handleSync);
+      window.removeEventListener('typemaster-admin-feed', handleSync);
+      window.removeEventListener('typemaster-profile-sync', handleSync);
+      if (historyBc) historyBc.close();
+      if (adminBc) adminBc.close();
+      if (realtimeChannel && supabaseService.supabase) {
+        supabaseService.supabase.removeChannel(realtimeChannel);
+      }
+    };
   }, [timeframe]);
 
   const [isModalOpen, setIsModalOpen] = useState(false);

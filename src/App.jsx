@@ -475,7 +475,8 @@ export default function App() {
       setPortal('admin');
       setCurrentView('admin');
       localStorage.setItem('typemaster_active_portal', 'admin');
-      window.history.pushState(null, '', '/admin');
+      const preservedPath = window.location.pathname.startsWith('/admin') ? window.location.pathname : '/admin';
+      window.history.pushState(null, '', preservedPath);
     } else {
       setPortal('user');
       setCurrentView('dashboard');

@@ -18,7 +18,7 @@ import {
   X
 } from 'lucide-react';
 import { adminService, isDateInPeriod } from '../../services/adminService';
-import { supabaseService } from '../../services/supabaseService';
+import { supabase, supabaseService } from '../../services/supabaseService';
 
 export default function AdminUsersView({
   onSelectUserForAnalytics,
@@ -27,19 +27,17 @@ export default function AdminUsersView({
   onDateRangeChange
 }) {
   const [users, setUsers] = useState(() => adminService.getUsers());
+  const usersList = users;
+  const setUsersList = setUsers;
+  const toast = {
+    success: (msg) => showToast(msg),
+    error: (msg) => showToast(msg)
+  };
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
-  const [dateFilter, setDateFilter] = useState(() => dateRange || 'All Time');
+  const [dateFilter, setDateFilter] = useState('All Time');
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 8;
-
-  // Sync with top header reporting period
-  useEffect(() => {
-    if (dateRange && dateRange !== dateFilter) {
-      setDateFilter(dateRange);
-      setCurrentPage(1);
-    }
-  }, [dateRange]);
 
   const handleDateFilterChange = (val) => {
     setDateFilter(val);
@@ -66,7 +64,7 @@ export default function AdminUsersView({
     setTimeout(() => setFeedbackToast(''), 3000);
   };
 
-  const refreshUsers = async () => {
+  const fetchUsers = async () => {
     const live = await adminService.fetchAllUsersLive();
     if (live && live.length > 0) {
       setUsers(live);
@@ -74,53 +72,116 @@ export default function AdminUsersView({
       setUsers(adminService.getUsers());
     }
   };
+  const refreshUsers = fetchUsers;
 
   useEffect(() => {
-    let isMounted = true;
-    adminService.fetchAllUsersLive().then((live) => {
-      if (isMounted && live && live.length > 0) {
-        setUsers(live);
-      }
-    });
+    fetchUsers();
 
-    // 1. Cross-tab BroadcastChannel listener
-    let bc;
-    try {
-      bc = new BroadcastChannel('admin-live-feed');
-      bc.onmessage = () => {
-        if (isMounted) refreshUsers();
-      };
-    } catch {
-      // fallback
-    }
-
-    // 2. Window CustomEvent listener
-    const handleCustomEvent = () => {
-      if (isMounted) refreshUsers();
-    };
-    window.addEventListener('typemaster-admin-feed', handleCustomEvent);
-
-    // 3. Supabase Realtime channel
-    let subChannel;
-    if (supabaseService.isConfigured()) {
+    // Supabase Realtime Sync for Users (/admin/users)
+    let usersSubscription = null;
+    if (supabaseService.isConfigured() && supabase) {
       try {
-        subChannel = supabaseService.supabase
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
-            if (isMounted) refreshUsers();
-          })
+        usersSubscription = supabase
+          .channel('realtime_users_changes')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'users' },
+            (payload) => {
+              if (payload.eventType === 'DELETE') {
+                const delId = payload.old?.id;
+                setUsersList((prev) => prev.filter((u) => u.id !== delId && String(u.id) !== String(delId)));
+                if (delId) adminService.deleteUser(delId);
+              } else if (payload.eventType === 'INSERT') {
+                const newUser = {
+                  id: payload.new.id,
+                  name: payload.new.name || payload.new.display_name || payload.new.username || payload.new.full_name || 'Typist',
+                  displayName: payload.new.display_name || payload.new.username || 'Typist',
+                  username: payload.new.username || 'Typist',
+                  email: payload.new.email || '—',
+                  role: payload.new.role || 'user',
+                  status: payload.new.status || 'Active',
+                  joinedOn: payload.new.created_at ? new Date(payload.new.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Recent',
+                  testsTaken: Number(payload.new.tests_completed) || 0,
+                  avgWpm: Number(payload.new.avg_wpm) || 0,
+                  highestWpm: Number(payload.new.best_wpm) || 0,
+                  accuracy: Number(payload.new.accuracy) || 0,
+                  totalPracticeTimeHours: Number(((Number(payload.new.tests_completed) || 0) * 0.05).toFixed(1)),
+                  is_premium: Boolean(payload.new.is_premium),
+                  lastActive: 'Active',
+                  ...payload.new
+                };
+                setUsersList((prev) => [newUser, ...prev.filter((u) => u.id !== newUser.id && String(u.id) !== String(newUser.id))]);
+              } else if (payload.eventType === 'UPDATE') {
+                if (payload.new?.role === 'deleted') {
+                  const delId = payload.new.id;
+                  setUsersList((prev) => prev.filter((u) => u.id !== delId && String(u.id) !== String(delId)));
+                  if (delId) adminService.deleteUser(delId);
+                } else {
+                  setUsersList((prev) =>
+                    prev.map((u) =>
+                      u.id === payload.new.id || String(u.id) === String(payload.new?.id)
+                        ? {
+                            ...u,
+                            ...payload.new,
+                            name: payload.new.name || payload.new.display_name || payload.new.username || u.name
+                          }
+                        : u
+                    )
+                  );
+                }
+              }
+            }
+          )
           .subscribe();
       } catch (err) {
         console.warn('Realtime admin users error:', err);
       }
     }
 
-    return () => {
-      isMounted = false;
-      if (bc) bc.close();
-      window.removeEventListener('typemaster-admin-feed', handleCustomEvent);
-      if (subChannel && supabaseService.supabase) {
-        supabaseService.supabase.removeChannel(subChannel);
+    // Cross-tab BroadcastChannel listener
+    let bc = null;
+    let adminBc = null;
+    try {
+      bc = new BroadcastChannel('admin-live-feed');
+      bc.onmessage = (event) => {
+        if (event.data?.type === 'USER_DELETED') {
+          const deletedId = event.data.payload?.id || event.data.payload;
+          setUsersList((prev) => prev.filter((u) => u.id !== deletedId && String(u.id) !== String(deletedId)));
+        } else {
+          fetchUsers();
+        }
+      };
+      adminBc = new BroadcastChannel('typemaster_admin_feed');
+      adminBc.onmessage = (event) => {
+        if (event.data?.type === 'USER_DELETED') {
+          const deletedId = event.data.payload?.id || event.data.payload;
+          setUsersList((prev) => prev.filter((u) => u.id !== deletedId && String(u.id) !== String(deletedId)));
+        } else {
+          fetchUsers();
+        }
+      };
+    } catch {
+      // fallback
+    }
+
+    // Window CustomEvent listener
+    const handleCustomEvent = (e) => {
+      if (e.detail?.type === 'USER_DELETED') {
+        const deletedId = e.detail.payload?.id || e.detail.payload;
+        setUsersList((prev) => prev.filter((u) => u.id !== deletedId && String(u.id) !== String(deletedId)));
+      } else {
+        fetchUsers();
       }
+    };
+    window.addEventListener('typemaster-admin-feed', handleCustomEvent);
+
+    return () => {
+      if (usersSubscription && supabase) {
+        supabase.removeChannel(usersSubscription);
+      }
+      if (bc) bc.close();
+      if (adminBc) adminBc.close();
+      window.removeEventListener('typemaster-admin-feed', handleCustomEvent);
     };
   }, []);
 
@@ -134,15 +195,19 @@ export default function AdminUsersView({
   // Filtered & Searched Users (strictly respects date period, search and status)
   const filteredUsers = useMemo(() => {
     return users.filter((u) => {
+      const q = searchQuery.toLowerCase().trim();
       const matchSearch =
-        u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        u.email.toLowerCase().includes(searchQuery.toLowerCase());
+        !q ||
+        (u.name || '').toLowerCase().includes(q) ||
+        (u.displayName || '').toLowerCase().includes(q) ||
+        (u.username || '').toLowerCase().includes(q) ||
+        (u.email || '').toLowerCase().includes(q);
       const matchStatus = statusFilter === 'All' ? true : u.status === statusFilter;
 
-      const userDate = u.joinedOn || (u.created_at ? u.created_at.split('T')[0] : '');
-      const matchDate = isDateInPeriod(userDate, dateFilter);
+      const userDate = (u.created_at ? u.created_at.split('T')[0] : '') || u.joinedOn;
+      const matchDate = (dateFilter === 'All Time' || dateFilter === 'All') ? true : isDateInPeriod(userDate, dateFilter);
 
-      return matchSearch && matchStatus && matchDate;
+      return matchSearch && matchStatus && (q ? true : matchDate);
     });
   }, [users, searchQuery, statusFilter, dateFilter]);
 
@@ -156,15 +221,48 @@ export default function AdminUsersView({
   // Actions
   const handleToggleStatus = (u) => {
     const next = adminService.toggleUserStatus(u.id);
-    refreshUsers();
+    fetchUsers();
     showToast(`${u.name} is now ${next}`);
   };
 
-  const handleDeleteUser = (u) => {
-    if (window.confirm(`Are you sure you want to delete user account "${u.name}" (${u.email})?`)) {
-      adminService.deleteUser(u.id);
-      refreshUsers();
-      showToast(`User ${u.name} has been removed.`);
+  const handleDeleteUser = async (userOrId, maybeName) => {
+    const userId = typeof userOrId === 'object' && userOrId !== null ? userOrId.id : userOrId;
+    const userName = (typeof userOrId === 'object' && userOrId !== null
+      ? (userOrId.name || userOrId.displayName || userOrId.username)
+      : maybeName) || 'User';
+
+    try {
+      // 1. Delete associated child records first to satisfy FK constraints
+      if (supabaseService.isConfigured() && supabase) {
+        await supabase.from('test_logs').delete().eq('user_id', userId);
+        await supabase.from('scheduled_test_attempts').delete().eq('user_id', userId);
+        try {
+          await supabase.from('user_achievements').delete().eq('user_id', userId);
+        } catch {}
+        try {
+          await supabase.from('streaks').delete().eq('user_id', userId);
+        } catch {}
+
+        // 2. Delete user record from main users table
+        const { error } = await supabase.from('users').delete().eq('id', userId);
+        if (error) throw error;
+
+        // Ensure cloud record is marked deleted even under restricted RLS policies
+        try {
+          await supabase.from('users').update({ role: 'deleted' }).eq('id', userId);
+        } catch {}
+      }
+
+      // Also clean up local registries and caches in adminService
+      adminService.deleteUser(userId, null, userName);
+
+      // 3. Immediately filter local React state array to remove user from UI instantly
+      setUsersList((prevUsers) => prevUsers.filter((user) => user.id !== userId && String(user.id) !== String(userId)));
+
+      toast.success(`User ${userName} has been removed successfully!`);
+    } catch (err) {
+      console.error('Error deleting user:', err);
+      toast.error('Failed to delete user account.');
     }
   };
 
@@ -330,6 +428,7 @@ export default function AdminUsersView({
         >
           <Search size={16} color="#94A3B8" />
           <input
+            id="users-search-input"
             type="text"
             placeholder="Search users by name or email..."
             value={searchQuery}
@@ -505,9 +604,9 @@ export default function AdminUsersView({
                             fontSize: '0.75rem'
                           }}
                         >
-                          {u.name.charAt(0).toUpperCase()}
+                          {(u.name || u.displayName || u.username || 'U').charAt(0).toUpperCase()}
                         </div>
-                        <span>{u.name}</span>
+                        <span>{u.name || u.displayName || u.username || 'Typist'}</span>
                         {u.is_premium && (
                           <span
                             style={{
@@ -613,7 +712,10 @@ export default function AdminUsersView({
 
                         {/* Delete */}
                         <button
-                          onClick={() => handleDeleteUser(u)}
+                          id={`delete-user-${u.username || u.id}`}
+                          data-testid={`delete-user-${u.username || u.id}`}
+                          aria-label={`Delete user ${u.name || u.username}`}
+                          onClick={() => handleDeleteUser(u.id, u.name || u.displayName || u.username)}
                           title="Delete account"
                           style={tableActionBtnStyle('#FEF2F2', '#EF4444')}
                         >

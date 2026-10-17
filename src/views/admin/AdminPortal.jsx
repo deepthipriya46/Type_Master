@@ -18,14 +18,49 @@ export default function AdminPortal({
   onSignOut,
   onUserUpdate
 }) {
-  const [currentAdminView, setCurrentAdminView] = useState('dashboard');
+  const getInitialView = () => {
+    if (typeof window !== 'undefined') {
+      const p = window.location.pathname.toLowerCase();
+      if (p.includes('/admin/users') || p === '/users') return 'users';
+      if (p.includes('/admin/performance')) return 'performance';
+      if (p.includes('/admin/practice')) return 'practice-content';
+      if (p.includes('/admin/achievements')) return 'achievements';
+      if (p.includes('/admin/scheduled-tests')) return 'scheduled-tests';
+      if (p.includes('/admin/reports')) return 'reports';
+      if (p.includes('/admin/feedback')) return 'feedback';
+      if (p.includes('/admin/announcements')) return 'announcements';
+      if (p.includes('/admin/settings')) return 'settings';
+    }
+    return 'dashboard';
+  };
+
+  const [currentAdminView, setCurrentAdminView] = useState(getInitialView);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [dateRange, setDateRange] = useState('Oct 1, 2026 - Oct 31, 2026');
   const [selectedUserForAnalytics, setSelectedUserForAnalytics] = useState(null);
 
+  const handleNavigate = (view) => {
+    setCurrentAdminView(view);
+    if (typeof window !== 'undefined' && window.history) {
+      const targetPath = view === 'dashboard' ? '/admin' : `/admin/${view}`;
+      if (window.location.pathname !== targetPath) {
+        window.history.pushState(null, '', targetPath);
+      }
+    }
+  };
+
+  // Sync on browser back/forward
+  React.useEffect(() => {
+    const handlePopState = () => {
+      setCurrentAdminView(getInitialView());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   const handleSelectUser = (user) => {
     setSelectedUserForAnalytics(user);
-    setCurrentAdminView('performance');
+    handleNavigate('performance');
   };
 
   return (
@@ -41,7 +76,7 @@ export default function AdminPortal({
       {/* Dark-themed Admin Sidebar */}
       <AdminSidebar
         currentView={currentAdminView}
-        onNavigate={(view) => setCurrentAdminView(view)}
+        onNavigate={handleNavigate}
         onSwitchToUserPortal={onSwitchToUserPortal}
         onSignOut={onSignOut}
         collapsed={sidebarCollapsed}
@@ -53,7 +88,7 @@ export default function AdminPortal({
         {/* Sticky Admin Top Header */}
         <AdminTopHeader
           currentUser={currentUser}
-          onNavigate={(view) => setCurrentAdminView(view)}
+          onNavigate={handleNavigate}
           onSwitchToUserPortal={onSwitchToUserPortal}
           onSignOut={onSignOut}
           dateRange={dateRange}
@@ -64,7 +99,7 @@ export default function AdminPortal({
         <div style={{ flex: 1 }}>
           {currentAdminView === 'dashboard' && (
             <AdminDashboardView
-              onNavigate={(view) => setCurrentAdminView(view)}
+              onNavigate={handleNavigate}
               onSelectUserForAnalytics={handleSelectUser}
               dateRange={dateRange}
               onDateRangeChange={setDateRange}
@@ -74,7 +109,7 @@ export default function AdminPortal({
           {currentAdminView === 'users' && (
             <AdminUsersView
               onSelectUserForAnalytics={handleSelectUser}
-              onNavigate={(view) => setCurrentAdminView(view)}
+              onNavigate={handleNavigate}
               dateRange={dateRange}
               onDateRangeChange={setDateRange}
             />

@@ -554,10 +554,17 @@ export default function TypingTestView({
       formattedTime: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
     };
 
-    const submissionResult = await supabaseService.submitTest(sessionPayload);
+    let submissionResult;
+    try {
+      submissionResult = await supabaseService.submitTest(sessionPayload);
+    } catch (err) {
+      console.warn('submitTest notice:', err);
+    }
+
     const fullSessionData = {
       ...sessionPayload,
-      ...submissionResult
+      ...(submissionResult || {}),
+      user: submissionResult?.user || supabaseService.getCurrentUser()
     };
 
     setCompletedSessionData(fullSessionData);

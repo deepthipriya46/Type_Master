@@ -201,8 +201,23 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
             'postgres_changes',
             { event: '*', schema: 'public', table: 'users' },
             (payload) => {
-              if (payload.new) handleIncomingProfile(payload.new);
-              else triggerDebouncedSync();
+              if (payload.eventType === 'DELETE' || payload.new?.role === 'deleted' || !payload.new) {
+                const deletedId = payload.old?.id || payload.new?.id;
+                if (deletedId) {
+                  adminService.deleteUser(deletedId);
+                  setMetrics((prev) => ({
+                    ...prev,
+                    totalUsers: Math.max(0, prev.totalUsers - 1),
+                    recentUsers: prev.recentUsers.filter(u => String(u.id) !== String(deletedId)),
+                    topPerformers: prev.topPerformers.filter(u => String(u.id) !== String(deletedId))
+                  }));
+                }
+                triggerDebouncedSync();
+              } else if (payload.new) {
+                handleIncomingProfile(payload.new);
+              } else {
+                triggerDebouncedSync();
+              }
             }
           )
           .on(
@@ -224,6 +239,22 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
             { event: 'ADMIN_CREATED' },
             (payload) => {
               handleIncomingProfile(payload.payload);
+            }
+          )
+          .on(
+            'broadcast',
+            { event: 'USER_DELETED' },
+            (payload) => {
+              const deletedId = payload.payload?.id || payload.payload;
+              if (deletedId) {
+                setMetrics((prev) => ({
+                  ...prev,
+                  totalUsers: Math.max(0, prev.totalUsers - 1),
+                  recentUsers: prev.recentUsers.filter(u => String(u.id) !== String(deletedId)),
+                  topPerformers: prev.topPerformers.filter(u => String(u.id) !== String(deletedId))
+                }));
+              }
+              triggerDebouncedSync();
             }
           )
           .on(
@@ -262,6 +293,17 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
           handleIncomingTest(event.data.payload);
         } else if (event.data?.type === 'USER_REGISTERED' || event.data?.type === 'ADMIN_CREATED') {
           handleIncomingProfile(event.data.payload);
+        } else if (event.data?.type === 'USER_DELETED') {
+          const deletedId = event.data.payload?.id || event.data.payload;
+          if (deletedId) {
+            setMetrics((prev) => ({
+              ...prev,
+              totalUsers: Math.max(0, prev.totalUsers - 1),
+              recentUsers: prev.recentUsers.filter(u => String(u.id) !== String(deletedId)),
+              topPerformers: prev.topPerformers.filter(u => String(u.id) !== String(deletedId))
+            }));
+          }
+          triggerDebouncedSync();
         } else if (event.data?.type === 'FEEDBACK_SUBMITTED') {
           handleIncomingFeedback(event.data.payload);
         }
@@ -276,6 +318,17 @@ export default function AdminDashboardView({ onNavigate, onSelectUserForAnalytic
         handleIncomingTest(e.detail.payload);
       } else if (e.detail?.type === 'USER_REGISTERED' || e.detail?.type === 'ADMIN_CREATED') {
         handleIncomingProfile(e.detail.payload);
+      } else if (e.detail?.type === 'USER_DELETED') {
+        const deletedId = e.detail.payload?.id || e.detail.payload;
+        if (deletedId) {
+          setMetrics((prev) => ({
+            ...prev,
+            totalUsers: Math.max(0, prev.totalUsers - 1),
+            recentUsers: prev.recentUsers.filter(u => String(u.id) !== String(deletedId)),
+            topPerformers: prev.topPerformers.filter(u => String(u.id) !== String(deletedId))
+          }));
+        }
+        triggerDebouncedSync();
       } else if (e.detail?.type === 'FEEDBACK_SUBMITTED') {
         handleIncomingFeedback(e.detail.payload);
       }

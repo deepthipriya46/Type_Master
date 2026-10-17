@@ -565,17 +565,57 @@ class AdminService {
   // Queries live Supabase PostgreSQL (or local registry in offline mode)
   // ==========================================================
 
+  isUserDeleted(id) {
+    if (!id) return false;
+    const deletedList = this._get('typemaster_deleted_user_ids', []);
+    return deletedList.includes(String(id));
+  }
+
   async fetchAllUsersLive() {
     // 1. Gather all registered users from local registries first
     const reg1 = this._get('users_registry', []);
     const reg2 = this._get('typemaster_users_registry', []);
     const userMap = new Map();
 
-    [...reg1, ...reg2].forEach(r => {
-      if (r && r.id && !String(r.id).startsWith('guest_')) {
-        userMap.set(String(r.id), r);
+    const registerCandidate = (r) => {
+      if (!r || !r.id || String(r.id).startsWith('guest_') || String(r.id) === 'user_active' || r.role === 'deleted' || this.isUserDeleted(r.id)) return;
+      const idKey = String(r.id);
+      const existing = userMap.get(idKey) || {};
+      userMap.set(idKey, {
+        ...existing,
+        ...r,
+        tests_completed: Math.max(Number(existing.tests_completed) || 0, Number(r.tests_completed) || 0, Number(existing.testsTaken) || 0, Number(r.testsTaken) || 0),
+        best_wpm: Math.max(Number(existing.best_wpm) || 0, Number(r.best_wpm) || 0, Number(existing.highestWpm) || 0, Number(r.highestWpm) || 0),
+        avg_wpm: Number(r.avg_wpm) || Number(r.avgWpm) || Number(existing.avg_wpm) || 0,
+        accuracy: Number(r.accuracy) || Number(existing.accuracy) || 0
+      });
+    };
+
+    [...reg1, ...reg2].forEach(registerCandidate);
+
+    // Also check current active user session
+    const cu = this._get('typemaster_current_user', null) || this._get('current_user', null);
+    if (cu) registerCandidate(cu);
+
+    // Also scan localStorage for keys matching user_*
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('user_') && !key.startsWith('user_active')) {
+            const raw = localStorage.getItem(key);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (parsed && typeof parsed === 'object') {
+                registerCandidate(parsed);
+              }
+            }
+          }
+        }
+      } catch {
+        // ignore
       }
-    });
+    }
 
     // 2. Query live Supabase users table (authoritative cloud state)
     if (supabaseService.isConfigured()) {
@@ -587,9 +627,29 @@ class AdminService {
 
         if (!error && Array.isArray(dbUsers)) {
           dbUsers.forEach(u => {
-            if (u && u.id && !String(u.id).startsWith('guest_')) {
-              const existing = userMap.get(String(u.id)) || {};
-              userMap.set(String(u.id), { ...existing, ...u });
+            if (u && u.id && !String(u.id).startsWith('guest_') && u.role !== 'deleted' && !this.isUserDeleted(u.id)) {
+              // Match existing local record by ID or email or username
+              let matchedKey = String(u.id);
+              if (!userMap.has(matchedKey)) {
+                for (const [k, v] of userMap.entries()) {
+                  if (
+                    (u.email && v.email && u.email.toLowerCase().trim() === v.email.toLowerCase().trim()) ||
+                    (u.username && v.username && u.username.toLowerCase().trim() === v.username.toLowerCase().trim())
+                  ) {
+                    matchedKey = k;
+                    break;
+                  }
+                }
+              }
+              const existing = userMap.get(matchedKey) || {};
+              userMap.set(String(u.id), {
+                ...existing,
+                ...u,
+                tests_completed: Math.max(Number(existing.tests_completed) || 0, Number(existing.testsTaken) || 0, Number(u.tests_completed) || 0),
+                best_wpm: Math.max(Number(existing.best_wpm) || 0, Number(existing.highestWpm) || 0, Number(u.best_wpm) || 0),
+                avg_wpm: Number(existing.avg_wpm) || Number(u.avg_wpm) || 0,
+                accuracy: Number(existing.accuracy) > 0 ? Number(existing.accuracy) : Number(u.accuracy) || 0
+              });
             }
           });
         }
@@ -605,6 +665,21 @@ class AdminService {
         ? new Date(r.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
         : (r.joinedOn || 'Recent');
 
+      // Fetch any local logs for this user to ensure testsTaken and speed are never understated
+      const localLogs = this._get(`test_logs_${r.id}`, []);
+      const testsCount = Math.max(
+        Array.isArray(localLogs) ? localLogs.length : 0,
+        Number(r.tests_completed) || 0,
+        Number(r.testsTaken) || 0
+      );
+      const bestSpeed = Math.max(
+        Number(r.best_wpm) || 0,
+        Number(r.highestWpm) || 0,
+        ...(Array.isArray(localLogs) ? localLogs.map(l => Number(l.wpm) || 0) : [])
+      );
+      const avgSpeed = Number(r.avg_wpm) || Number(r.avgWpm) || bestSpeed;
+      const acc = Number(r.accuracy) || 0;
+
       return {
         id: r.id,
         name: displayName,
@@ -616,11 +691,11 @@ class AdminService {
         status: r.status || 'Active',
         created_at: r.created_at,
         joinedOn: formattedJoined,
-        testsTaken: Number(r.tests_completed) || Number(r.testsTaken) || 0,
-        avgWpm: Number(r.avg_wpm) || Number(r.avgWpm) || 0,
-        highestWpm: Number(r.best_wpm) || Number(r.highestWpm) || 0,
-        accuracy: Number(r.accuracy) || 0,
-        totalPracticeTimeHours: Number(((Number(r.tests_completed || r.testsTaken) || 0) * 0.05).toFixed(1)),
+        testsTaken: testsCount,
+        avgWpm: avgSpeed,
+        highestWpm: bestSpeed,
+        accuracy: acc,
+        totalPracticeTimeHours: Number((testsCount * 0.05).toFixed(1)),
         is_premium: Boolean(r.is_premium),
         lastActive: r.updated_at ? new Date(r.updated_at).toLocaleDateString() : 'Active'
       };
@@ -704,8 +779,8 @@ class AdminService {
       ? allTestLogs.filter(l => isDateInPeriod(l.created_at || l.date, timeframe))
       : allTestLogs;
 
-    // Filter strictly for registered accounts (exclude temporary anonymous guest IDs)
-    const registeredUsers = allUsers.filter(u => u && u.id && !String(u.id).startsWith('guest_'));
+    // Filter strictly for registered accounts (exclude temporary anonymous guest IDs and deleted users)
+    const registeredUsers = allUsers.filter(u => u && u.id && !String(u.id).startsWith('guest_') && u.role !== 'deleted' && !this.isUserDeleted(u.id));
     // Total Registered Users reflects real-time total registered typists from the beginning
     const totalUsers = registeredUsers.length;
 
@@ -780,21 +855,28 @@ class AdminService {
     const candidatePerformers = registeredUsers.map(u => {
       const uid = String(u.id);
       const logs = userValidLogsMap.get(uid) || [];
-      let testsCount = logs.length;
-      let userBestWpm = 0;
-      let userAvgWpm = 0;
-      let userAvgAccuracy = 0;
+      const localLogs = this._get(`test_logs_${uid}`, []);
+      const combinedUserLogs = [...logs];
+      if (Array.isArray(localLogs)) {
+        localLogs.forEach(ll => {
+          if (ll && !combinedUserLogs.some(cl => cl.id === ll.id || (cl.created_at === ll.created_at && cl.wpm === ll.wpm))) {
+            combinedUserLogs.push(ll);
+          }
+        });
+      }
 
-      if (testsCount > 0) {
-        userBestWpm = Math.max(...logs.map(l => Number(l.wpm) || 0));
-        userAvgWpm = Math.round(logs.reduce((sum, l) => sum + (Number(l.wpm) || 0), 0) / testsCount);
-        userAvgAccuracy = Number((logs.reduce((sum, l) => sum + (Number(l.accuracy) || 0), 0) / testsCount).toFixed(1));
-      } else if (u.testsTaken > 0 || u.highestWpm > 0 || u.avgWpm > 0) {
-        // Fallback to persisted stats on user row
-        testsCount = u.testsTaken || 0;
-        userBestWpm = Math.round(u.highestWpm || u.best_wpm || u.avgWpm || 0);
-        userAvgWpm = Math.round(u.avgWpm || userBestWpm);
-        userAvgAccuracy = Number(Number(u.accuracy || 0).toFixed(1));
+      let testsCount = Math.max(combinedUserLogs.length, Number(u.testsTaken) || 0, Number(u.tests_completed) || 0);
+      let userBestWpm = Math.max(Number(u.highestWpm) || 0, Number(u.best_wpm) || 0, ...(combinedUserLogs.map(l => Number(l.wpm) || 0)));
+      let userAvgWpm = Number(u.avgWpm) || Number(u.avg_wpm) || 0;
+      let userAvgAccuracy = Number(u.accuracy) || 0;
+
+      if (combinedUserLogs.length > 0) {
+        if (!userAvgWpm) {
+          userAvgWpm = Math.round(combinedUserLogs.reduce((sum, l) => sum + (Number(l.wpm) || 0), 0) / combinedUserLogs.length);
+        }
+        if (!userAvgAccuracy) {
+          userAvgAccuracy = Number((combinedUserLogs.reduce((sum, l) => sum + (Number(l.accuracy) || 0), 0) / combinedUserLogs.length).toFixed(1));
+        }
       }
 
       return {
@@ -1015,27 +1097,77 @@ class AdminService {
     const reg1 = this._get('users_registry', []);
     const reg2 = this._get('typemaster_users_registry', []);
     const mergedMap = new Map();
-    [...reg1, ...reg2].forEach(r => {
-      if (r && r.id && !String(r.id).startsWith('guest_') && !mergedMap.has(String(r.id))) {
-        mergedMap.set(String(r.id), r);
+
+    const registerCandidate = (r) => {
+      if (!r || !r.id || String(r.id).startsWith('guest_') || String(r.id) === 'user_active' || r.role === 'deleted' || this.isUserDeleted(r.id)) return;
+      const idKey = String(r.id);
+      const existing = mergedMap.get(idKey) || {};
+      mergedMap.set(idKey, {
+        ...existing,
+        ...r,
+        tests_completed: Math.max(Number(existing.tests_completed) || 0, Number(r.tests_completed) || 0, Number(existing.testsTaken) || 0, Number(r.testsTaken) || 0),
+        best_wpm: Math.max(Number(existing.best_wpm) || 0, Number(r.best_wpm) || 0, Number(existing.highestWpm) || 0, Number(r.highestWpm) || 0),
+        avg_wpm: Number(r.avg_wpm) || Number(r.avgWpm) || Number(existing.avg_wpm) || 0,
+        accuracy: Number(r.accuracy) || Number(existing.accuracy) || 0
+      });
+    };
+
+    [...reg1, ...reg2].forEach(registerCandidate);
+
+    const cu = this._get('typemaster_current_user', null) || this._get('current_user', null);
+    if (cu) registerCandidate(cu);
+
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('user_') && !key.startsWith('user_active')) {
+            const raw = localStorage.getItem(key);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (parsed && typeof parsed === 'object') {
+                registerCandidate(parsed);
+              }
+            }
+          }
+        }
+      } catch {
+        // ignore
       }
-    });
+    }
+
     const registered = Array.from(mergedMap.values());
-    return registered.map(r => ({
-      id: r.id,
-      name: r.displayName || r.display_name || r.username || 'Typist',
-      email: r.email || `${r.username || 'user'}@typemaster.local`,
-      role: r.role || (r.email === 'admin@typemaster.com' ? 'admin' : 'user'),
-      status: r.status || 'Active',
-      joinedOn: r.created_at ? r.created_at.split('T')[0] : '2026-10-09',
-      testsTaken: r.tests_completed || 0,
-      avgWpm: Number(r.avg_wpm) || 0,
-      highestWpm: Number(r.best_wpm) || 0,
-      accuracy: Number(r.accuracy) || 0,
-      totalPracticeTimeHours: Number(((r.tests_completed || 0) * 0.05).toFixed(1)),
-      is_premium: Boolean(r.is_premium),
-      lastActive: 'Active'
-    }));
+    return registered.map(r => {
+      const localLogs = this._get(`test_logs_${r.id}`, []);
+      const testsCount = Math.max(
+        Array.isArray(localLogs) ? localLogs.length : 0,
+        Number(r.tests_completed) || 0,
+        Number(r.testsTaken) || 0
+      );
+      const bestSpeed = Math.max(
+        Number(r.best_wpm) || 0,
+        Number(r.highestWpm) || 0,
+        ...(Array.isArray(localLogs) ? localLogs.map(l => Number(l.wpm) || 0) : [])
+      );
+      const avgSpeed = Number(r.avg_wpm) || Number(r.avgWpm) || bestSpeed;
+      const acc = Number(r.accuracy) || 0;
+
+      return {
+        id: r.id,
+        name: r.displayName || r.display_name || r.username || 'Typist',
+        email: r.email || `${r.username || 'user'}@typemaster.local`,
+        role: r.role || (r.email === 'admin@typemaster.com' ? 'admin' : 'user'),
+        status: r.status || 'Active',
+        joinedOn: r.created_at ? r.created_at.split('T')[0] : '2026-10-09',
+        testsTaken: testsCount,
+        avgWpm: avgSpeed,
+        highestWpm: bestSpeed,
+        accuracy: acc,
+        totalPracticeTimeHours: Number((testsCount * 0.05).toFixed(1)),
+        is_premium: Boolean(r.is_premium),
+        lastActive: 'Active'
+      };
+    });
   }
 
   getUserById(id) {
@@ -1101,16 +1233,87 @@ class AdminService {
     return { success: false, message: 'User not found.' };
   }
 
-  deleteUser(id) {
-    let registered = this._get('typemaster_users_registry', []);
-    const user = registered.find(u => u.id === id);
-    if (user) {
-      registered = registered.filter(u => u.id !== id);
-      this._set('typemaster_users_registry', registered);
-      this.logAudit('User Deleted', user.username, `Deleted account ${user.email}`);
-      return true;
+  deleteUser(id, email = null, username = null) {
+    const idStr = String(id || '');
+    const cleanEmail = String(email || '').toLowerCase().trim();
+    const cleanUser = String(username || '').toLowerCase().trim();
+
+    const isMatch = (u) => {
+      if (!u) return false;
+      if (idStr && String(u.id) === idStr) return true;
+      if (cleanEmail && u.email && String(u.email).toLowerCase().trim() === cleanEmail) return true;
+      if (cleanUser && (u.username || u.name) && String(u.username || u.name).toLowerCase().trim() === cleanUser) return true;
+      return false;
+    };
+
+    // 0. Persist to typemaster_deleted_user_ids tombstone list
+    if (idStr) {
+      const deletedList = this._get('typemaster_deleted_user_ids', []);
+      if (!deletedList.includes(idStr)) {
+        deletedList.push(idStr);
+        this._set('typemaster_deleted_user_ids', deletedList);
+      }
     }
-    return false;
+
+    // 1. Remove from typemaster_users_registry
+    let reg1 = this._get('typemaster_users_registry', []);
+    const userFound = reg1.find(isMatch);
+    reg1 = reg1.filter(u => !isMatch(u));
+    this._set('typemaster_users_registry', reg1);
+
+    // 2. Remove from users_registry
+    let reg2 = this._get('users_registry', []);
+    reg2 = reg2.filter(u => !isMatch(u));
+    this._set('users_registry', reg2);
+
+    // 3. Remove from admin_users
+    let adminUsers = this._get('admin_users', []);
+    adminUsers = adminUsers.filter(u => !isMatch(u));
+    this._set('admin_users', adminUsers);
+
+    // 4. Remove all local storage user keys
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        localStorage.removeItem(`user_${idStr}`);
+        localStorage.removeItem(`test_logs_${idStr}`);
+        localStorage.removeItem(`streak_${idStr}`);
+        localStorage.removeItem(`achievements_${idStr}`);
+
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (!key) continue;
+          if (
+            key === `user_${idStr}` ||
+            key === `test_logs_${idStr}` ||
+            key === `streak_${idStr}` ||
+            key === `achievements_${idStr}`
+          ) {
+            localStorage.removeItem(key);
+          }
+        }
+      } catch (err) {
+        console.warn('LocalStorage cleanup notice:', err);
+      }
+    }
+
+    // 5. Broadcast deletion to all open tabs and windows
+    try {
+      window.dispatchEvent(new CustomEvent('typemaster-admin-feed', {
+        detail: { type: 'USER_DELETED', payload: { id: idStr, email: cleanEmail, username: cleanUser } }
+      }));
+      const bc1 = new BroadcastChannel('admin-live-feed');
+      bc1.postMessage({ type: 'USER_DELETED', payload: { id: idStr, email: cleanEmail, username: cleanUser } });
+      bc1.close();
+      const bc2 = new BroadcastChannel('typemaster_admin_feed');
+      bc2.postMessage({ type: 'USER_DELETED', payload: { id: idStr, email: cleanEmail, username: cleanUser } });
+      bc2.close();
+    } catch {
+      // fallback
+    }
+
+    const logIdentifier = cleanUser || userFound?.username || idStr;
+    this.logAudit('User Deleted', logIdentifier, `Deleted account ${cleanEmail || idStr}`);
+    return true;
   }
 
   // ==========================================================

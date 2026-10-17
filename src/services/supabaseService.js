@@ -2110,6 +2110,25 @@ class SupabaseService {
     this.setCurrentUser(updatedUser);
     this._setLocal(`user_${userId}`, updatedUser);
 
+    // Sync registries so table views, admin metrics, and leaderboards stay strictly connected
+    const reg1 = this._getLocal('users_registry', []);
+    const idx1 = reg1.findIndex(u => u && (u.id === userId || (u.email && updatedUser.email && u.email.toLowerCase() === updatedUser.email.toLowerCase())));
+    if (idx1 >= 0) {
+      reg1[idx1] = { ...reg1[idx1], ...updatedUser };
+    } else {
+      reg1.push(updatedUser);
+    }
+    this._setLocal('users_registry', reg1);
+
+    const reg2 = this._getLocal('typemaster_users_registry', []);
+    const idx2 = reg2.findIndex(u => u && (u.id === userId || (u.email && updatedUser.email && u.email.toLowerCase() === updatedUser.email.toLowerCase())));
+    if (idx2 >= 0) {
+      reg2[idx2] = { ...reg2[idx2], ...updatedUser };
+    } else {
+      reg2.push(updatedUser);
+    }
+    this._setLocal('typemaster_users_registry', reg2);
+
     // 4. Calculate Daily Streak in Real Time
     const streakData = this._getLocal(`streak_${userId}`, createFreshStreak(userId));
     const calculatedStreak = calculateStreakFromLogs(updatedLogs);
@@ -2177,12 +2196,29 @@ class SupabaseService {
         // UPSERT STREAK
         try {
           const streakDate = updatedStreak.last_active_date || now.toISOString().split('T')[0];
-          await this._withTimeout(this.supabase.from('streaks').upsert({
+          const streakData = {
             user_id: userId,
             current_streak: newStreak,
             longest_streak: updatedStreak.longest_streak,
             last_active_date: streakDate
-          }), 4000);
+          };
+          const { error: streakErr } = await this._withTimeout(
+            this.supabase.from('streaks').upsert(streakData, { onConflict: 'user_id' }),
+            4000
+          );
+          if (streakErr) {
+            const { data: existingStreak } = await this.supabase
+              .from('streaks')
+              .select('id')
+              .eq('user_id', userId)
+              .maybeSingle();
+
+            if (existingStreak?.id) {
+              await this.supabase.from('streaks').update(streakData).eq('user_id', userId);
+            } else {
+              await this.supabase.from('streaks').insert([streakData]);
+            }
+          }
         } catch (e) {
           console.warn('Streaks upsert note:', e);
         }
@@ -2315,17 +2351,21 @@ class SupabaseService {
   // Real-time Leaderboard updater
   _updateLeaderboardEntry(user, streak) {
     const leaderboard = this._getLocal('leaderboard', []);
-    const tier = (user.best_wpm || 0) >= 100 ? 'Master' :
-                 (user.best_wpm || 0) >= 75 ? 'Diamond' :
-                 (user.best_wpm || 0) >= 50 ? 'Gold' : 'Apprentice';
+    const bestWpm = Number(user.best_wpm) || 0;
+    let tier = 'Bronze';
+    if (bestWpm >= 80) tier = 'Master';
+    else if (bestWpm >= 50) tier = 'Gold';
+    else if (bestWpm >= 30) tier = 'Silver';
 
     const index = leaderboard.findIndex(l => l.userId === user.id);
     const entry = {
+      id: user.id,
       userId: user.id,
-      name: user.username,
-      wpm: user.best_wpm,
-      accuracy: user.accuracy,
-      streak: streak.current_streak,
+      name: user.full_name || user.displayName || user.username || 'Typist',
+      wpm: bestWpm,
+      accuracy: typeof user.accuracy === 'number' ? user.accuracy : parseFloat(user.accuracy || 0),
+      testsCompleted: Number(user.tests_completed) || 0,
+      streak: streak?.current_streak || 0,
       tier,
       avatar: user.avatar_url,
       lastUpdated: new Date().toISOString()
@@ -2516,6 +2556,40 @@ class SupabaseService {
             accuracy: accuracyDynamic
           };
 
+          this.setCurrentUser(syncedUser);
+          this._setLocal(`user_${userId}`, syncedUser);
+
+          // Update registries so leaderboard and admin views are always in sync
+          const reg1 = this._getLocal('users_registry', []);
+          const idx1 = reg1.findIndex(u => u && (u.id === userId || (u.email && syncedUser.email && u.email.toLowerCase() === syncedUser.email.toLowerCase())));
+          if (idx1 >= 0) {
+            reg1[idx1] = { ...reg1[idx1], ...syncedUser };
+          } else {
+            reg1.push(syncedUser);
+          }
+          this._setLocal('users_registry', reg1);
+
+          const reg2 = this._getLocal('typemaster_users_registry', []);
+          const idx2 = reg2.findIndex(u => u && (u.id === userId || (u.email && syncedUser.email && u.email.toLowerCase() === syncedUser.email.toLowerCase())));
+          if (idx2 >= 0) {
+            reg2[idx2] = { ...reg2[idx2], ...syncedUser };
+          } else {
+            reg2.push(syncedUser);
+          }
+          this._setLocal('typemaster_users_registry', reg2);
+          this._updateLeaderboardEntry(syncedUser, effectiveStreak);
+
+          // Auto-heal remote Supabase if local test count is ahead
+          if (this.isConfigured() && userRow && Number(syncedUser.tests_completed) > Number(userRow.tests_completed || 0)) {
+            this.supabase.from('users').update({
+              best_wpm: syncedUser.best_wpm,
+              avg_wpm: syncedUser.avg_wpm,
+              accuracy: syncedUser.accuracy,
+              tests_completed: syncedUser.tests_completed,
+              updated_at: new Date().toISOString()
+            }).eq('id', userId).catch(() => {});
+          }
+
           return {
             user: syncedUser,
             streak: effectiveStreak,
@@ -2675,22 +2749,156 @@ class SupabaseService {
     // Filter to registered users (exclude anonymous guests)
     const registeredUsers = (leaderboardData || []).filter(u => u && !String(u.id).startsWith('guest_'));
 
+    // Merge in any locally registered accounts that may not yet exist in remote response
+    const localRegUsers = this._getLocal ? this._getLocal('users_registry', []) : [];
+    localRegUsers.forEach(lu => {
+      if (lu && lu.id && !String(lu.id).startsWith('guest_') && !registeredUsers.some(ru => ru.id === lu.id)) {
+        registeredUsers.push(lu);
+      }
+    });
+
+    const activeUser = this.getCurrentUser();
+
     // Calculate user performance metrics dynamically
     const computedLeaderboard = registeredUsers.map((user) => {
-      // Also merge any latest local test logs for user if available
-      const localLogs = this._getLocal ? this._getLocal(`test_logs_${user.id}`, []) : [];
+      // Find matching user from activeUser, registry, or local storage by ID, email, or username
+      const localRegUsers = [
+        ...(this._getLocal ? this._getLocal('users_registry', []) : []),
+        ...(this._getLocal ? this._getLocal('typemaster_users_registry', []) : [])
+      ];
+
+      const isUserMatch = (candidate) => {
+        if (!candidate) return false;
+        if (user.id && candidate.id && String(candidate.id) === String(user.id)) return true;
+        if (user.email && candidate.email && String(candidate.email).toLowerCase().trim() === String(user.email).toLowerCase().trim()) return true;
+        if (user.username && candidate.username && String(candidate.username).toLowerCase().trim() === String(user.username).toLowerCase().trim()) return true;
+        return false;
+      };
+
+      const matchedActiveUser = isUserMatch(activeUser) ? activeUser : null;
+      const matchedLocalReg = localRegUsers.find(isUserMatch) || null;
+      let matchedLocalUser = this._getLocal ? this._getLocal(`user_${user.id}`, null) : null;
+      if (!matchedLocalUser && matchedActiveUser?.id) {
+        matchedLocalUser = this._getLocal ? this._getLocal(`user_${matchedActiveUser.id}`, null) : null;
+      }
+      if (!matchedLocalUser && matchedLocalReg?.id) {
+        matchedLocalUser = this._getLocal ? this._getLocal(`user_${matchedLocalReg.id}`, null) : null;
+      }
+
+      // Collect all candidate IDs for this user to gather all local logs
+      const candidateUserIds = new Set([
+        user.id,
+        matchedActiveUser?.id,
+        matchedLocalReg?.id,
+        matchedLocalUser?.id
+      ].filter(Boolean).map(String));
+
+      // Gather all local logs across candidate IDs
+      const localLogs = [];
+      if (this._getLocal) {
+        candidateUserIds.forEach(uid => {
+          const uLogs = this._getLocal(`test_logs_${uid}`, []);
+          if (Array.isArray(uLogs)) {
+            localLogs.push(...uLogs);
+          }
+        });
+
+        // Scan localStorage for any logs under test_logs_* matching email or username or candidate IDs
+        if (typeof window !== 'undefined' && window.localStorage) {
+          try {
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              if (key && key.startsWith('test_logs_')) {
+                const raw = localStorage.getItem(key);
+                if (
+                  raw &&
+                  ((user.email && raw.includes(user.email)) ||
+                   (user.username && raw.includes(user.username)) ||
+                   Array.from(candidateUserIds).some(cid => raw.includes(cid)))
+                ) {
+                  const parsed = JSON.parse(raw);
+                  if (Array.isArray(parsed)) {
+                    parsed.forEach(pl => {
+                      if (
+                        (pl.user_id && candidateUserIds.has(String(pl.user_id))) ||
+                        (pl.userEmail && user.email && String(pl.userEmail).toLowerCase().trim() === String(user.email).toLowerCase().trim()) ||
+                        (pl.userName && user.username && String(pl.userName).toLowerCase().trim() === String(user.username).toLowerCase().trim())
+                      ) {
+                        localLogs.push(pl);
+                      }
+                    });
+                  }
+                }
+              }
+            }
+          } catch {
+            // ignore scan errors
+          }
+        }
+      }
+
       const remoteLogs = user.test_logs || [];
       const combinedLogs = [...remoteLogs];
       for (const ll of localLogs) {
-        if (ll && ll.wpm && !combinedLogs.some(rl => rl.created_at === ll.created_at && rl.wpm === ll.wpm)) {
+        if (ll && Number(ll.wpm) > 0 && !combinedLogs.some(rl => rl.id === ll.id || (rl.created_at === ll.created_at && rl.wpm === ll.wpm))) {
           combinedLogs.push(ll);
         }
       }
 
       const logs = filterLogs(combinedLogs);
-      const testsCompleted = logs.length;
 
-      if (testsCompleted === 0) {
+      const effectiveUser = matchedActiveUser || matchedLocalUser || matchedLocalReg || user;
+
+      // Authoritative metrics computation
+      let testsCompleted = logs.length;
+      let maxWpm = logs.length > 0 ? Math.max(...logs.map((l) => Number(l.wpm) || 0)) : 0;
+      let avgAccuracy = logs.length > 0
+        ? Number((logs.reduce((acc, l) => acc + (Number(l.accuracy) || 0), 0) / logs.length).toFixed(1))
+        : 0;
+
+      // In All-Time timeframe, strictly connect and honor verified dashboard stats
+      if (!timeframe || timeframe.toLowerCase() === 'all-time' || timeframe.toLowerCase() === 'all') {
+        const profileTests = Math.max(
+          Number(effectiveUser?.tests_completed) || 0,
+          Number(matchedActiveUser?.tests_completed) || 0,
+          Number(matchedLocalUser?.tests_completed) || 0,
+          Number(matchedLocalReg?.tests_completed) || 0,
+          Number(user.tests_completed) || 0,
+          Number(user.testsTaken) || 0
+        );
+        const profileBestWpm = Math.max(
+          Number(effectiveUser?.best_wpm) || 0,
+          Number(matchedActiveUser?.best_wpm) || 0,
+          Number(matchedLocalUser?.best_wpm) || 0,
+          Number(matchedLocalReg?.best_wpm) || 0,
+          Number(user.best_wpm) || 0,
+          Number(user.highestWpm) || 0
+        );
+        const profileAccuracy = Number(effectiveUser?.accuracy) ||
+                                Number(matchedActiveUser?.accuracy) ||
+                                Number(matchedLocalUser?.accuracy) ||
+                                Number(matchedLocalReg?.accuracy) ||
+                                Number(user.accuracy) || 0;
+
+        testsCompleted = Math.max(testsCompleted, profileTests);
+        maxWpm = Math.max(maxWpm, profileBestWpm);
+        if (profileAccuracy > 0 && (avgAccuracy === 0 || testsCompleted === profileTests)) {
+          avgAccuracy = profileAccuracy;
+        }
+
+        // Auto-heal Supabase in background if local verified count is ahead
+        if (this.isConfigured() && user.id && testsCompleted > Number(user.tests_completed || 0)) {
+          this.supabase.from('users').update({
+            best_wpm: maxWpm,
+            avg_wpm: Number(effectiveUser?.avg_wpm) || maxWpm,
+            accuracy: avgAccuracy,
+            tests_completed: testsCompleted,
+            updated_at: new Date().toISOString()
+          }).eq('id', user.id).catch(() => {});
+        }
+      }
+
+      if (testsCompleted === 0 && maxWpm === 0) {
         return {
           id: user.id,
           userId: user.id,
@@ -2698,7 +2906,7 @@ class SupabaseService {
           user: user.full_name || user.displayName || user.username || 'Typist',
           email: user.email || 'N/A',
           wpm: 0,
-          accuracy: 0, // Set accuracy to 0% (not default 98%) when no tests taken
+          accuracy: 0,
           testsCompleted: 0,
           streak: 0,
           tier: 'Unranked',
@@ -2707,18 +2915,13 @@ class SupabaseService {
         };
       }
 
-      // Compute peak speed and average accuracy for active typists
-      const maxWpm = Math.max(...logs.map((l) => Number(l.wpm) || 0));
-      const avgAccuracy = (
-        logs.reduce((acc, l) => acc + (Number(l.accuracy) || 0), 0) / testsCompleted
-      ).toFixed(1);
-
       let tier = 'Bronze';
       if (maxWpm >= 80) tier = 'Master';
       else if (maxWpm >= 50) tier = 'Gold';
       else if (maxWpm >= 30) tier = 'Silver';
 
-      const streakData = this._getLocal ? this._getLocal(`streak_${user.id}`, { current_streak: 0 }) : { current_streak: 0 };
+      const streakData = this._getLocal ? this._getLocal(`streak_${user.id}`, null) : null;
+      const currentStreakVal = streakData?.current_streak ?? effectiveUser?.streak?.current_streak ?? 0;
 
       return {
         id: user.id,
@@ -2729,7 +2932,7 @@ class SupabaseService {
         wpm: maxWpm,
         accuracy: parseFloat(avgAccuracy),
         testsCompleted,
-        streak: streakData?.current_streak || 0,
+        streak: currentStreakVal,
         tier,
         status: user.status || 'Active',
         avatar: user.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.username || user.full_name || 'Typist')}`
@@ -3791,9 +3994,9 @@ class SupabaseService {
       try {
         const ch = this.supabase.channel('admin-live-feed');
         if (typeof ch.httpSend === 'function') {
-          ch.httpSend({ type: 'broadcast', event: type, payload });
-        } else {
-          ch.send({ type: 'broadcast', event: type, payload });
+          ch.httpSend(type, payload || {}).catch(() => {});
+        } else if (typeof ch.send === 'function') {
+          ch.send({ type: 'broadcast', event: type, payload: payload || {} }).catch(() => {});
         }
       } catch {
         // fallback
@@ -3822,10 +4025,11 @@ class SupabaseService {
     if (this.isConfigured()) {
       try {
         const ch = this.supabase.channel('user-profile-sync');
+        const userSyncPayload = { userId, updates: updates || {} };
         if (typeof ch.httpSend === 'function') {
-          ch.httpSend({ type: 'broadcast', event: type, payload: { userId, updates } });
-        } else {
-          ch.send({ type: 'broadcast', event: type, payload: { userId, updates } });
+          ch.httpSend(type, userSyncPayload).catch(() => {});
+        } else if (typeof ch.send === 'function') {
+          ch.send({ type: 'broadcast', event: type, payload: userSyncPayload }).catch(() => {});
         }
       } catch {
         // fallback
@@ -3857,11 +4061,16 @@ class SupabaseService {
     // 3. Supabase Realtime broadcast
     if (this.isConfigured()) {
       try {
-        this.supabase.channel('scheduled-tests-realtime').send({
-          type: 'broadcast',
-          event: type,
-          payload
-        });
+        const ch = this.supabase.channel('scheduled-tests-realtime');
+        if (typeof ch.httpSend === 'function') {
+          ch.httpSend(type, payload || {}).catch(() => {});
+        } else if (typeof ch.send === 'function') {
+          ch.send({
+            type: 'broadcast',
+            event: type,
+            payload: payload || {}
+          }).catch(() => {});
+        }
       } catch {
         // fallback
       }
@@ -4357,61 +4566,64 @@ class SupabaseService {
       created_at: completedAt || nowIso
     };
 
-    // 1. Supabase insert with schema resilience
-    if (this.isConfigured()) {
+    // 1. Supabase persistence with schema and conflict resilience
+    if (this.isConfigured() && scheduledTestId) {
       try {
-        // Attempt full enriched insert (omitting custom string ID so DB auto-generates UUID if required)
-        const dbPayload = {
-          scheduled_test_id: scheduledTestId,
-          scheduled_test_title: scheduledTestTitle || null,
-          user_id: userId,
-          user_name: attemptRecord.user_name,
-          user_email: attemptRecord.user_email,
-          wpm: attemptRecord.wpm,
-          raw_wpm: attemptRecord.raw_wpm,
-          accuracy: attemptRecord.accuracy,
-          duration: attemptRecord.duration,
-          errors: attemptRecord.errors,
-          characters: attemptRecord.characters,
-          correct_characters: attemptRecord.correct_characters,
-          wrong_characters: attemptRecord.wrong_characters,
-          missed_characters: attemptRecord.missed_characters,
-          extra_characters: attemptRecord.extra_characters,
-          score: attemptRecord.score,
-          status: attemptRecord.status,
-          prompt_text: attemptRecord.prompt_text,
-          typed_input: attemptRecord.typed_input,
-          mistake_details: attemptRecord.mistake_details,
-          started_at: attemptRecord.started_at,
-          completed_at: attemptRecord.completed_at
-        };
-
-        const { data, error } = await this._withTimeout(
-          this.supabase.from('scheduled_test_attempts').insert([dbPayload]).select(),
-          4000
-        );
-
-        if (error) {
-          // If remote table is missing enriched columns (e.g. before running migration),
-          // fallback gracefully to base columns so user attempt still records to DB
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(scheduledTestId);
+        if (isUuid) {
+          const durationVal = Math.max(1, Math.round(Number(attemptRecord.duration) || 60));
           const baseDbPayload = {
             scheduled_test_id: scheduledTestId,
             user_id: userId,
-            user_name: attemptRecord.user_name,
-            user_email: attemptRecord.user_email,
-            wpm: attemptRecord.wpm,
-            accuracy: attemptRecord.accuracy,
-            errors: attemptRecord.errors
+            user_name: attemptRecord.user_name || 'Typist',
+            user_email: attemptRecord.user_email || '',
+            wpm: Math.round(Number(attemptRecord.wpm) || 0),
+            raw_wpm: Math.round(Number(attemptRecord.raw_wpm || attemptRecord.wpm) || 0),
+            accuracy: Math.round(Number(attemptRecord.accuracy || 0) * 10) / 10,
+            duration: durationVal,
+            errors: Math.max(0, Number(attemptRecord.errors) || 0),
+            characters: Math.max(0, Number(attemptRecord.characters) || 0),
+            status: attemptRecord.status || 'completed'
           };
-          await this._withTimeout(
-            this.supabase.from('scheduled_test_attempts').insert([baseDbPayload]),
-            4000
-          ).catch(() => {});
-        } else if (data && data[0]?.id) {
-          attemptRecord.id = data[0].id;
+
+          // Check if user already has an attempt recorded for this scheduled test
+          const { data: existingAttempt } = await this._withTimeout(
+            this.supabase
+              .from('scheduled_test_attempts')
+              .select('id')
+              .eq('scheduled_test_id', scheduledTestId)
+              .eq('user_id', userId)
+              .maybeSingle(),
+            3000
+          ).catch(() => ({ data: null }));
+
+          if (existingAttempt?.id) {
+            // Update existing attempt to prevent 409 Conflict
+            await this._withTimeout(
+              this.supabase
+                .from('scheduled_test_attempts')
+                .update(baseDbPayload)
+                .eq('id', existingAttempt.id),
+              4000
+            ).catch(() => {});
+            attemptRecord.id = existingAttempt.id;
+          } else {
+            // Insert fresh attempt
+            const { data: insertedData } = await this._withTimeout(
+              this.supabase
+                .from('scheduled_test_attempts')
+                .insert([baseDbPayload])
+                .select(),
+              4000
+            ).catch(() => ({ data: null }));
+
+            if (insertedData && insertedData[0]?.id) {
+              attemptRecord.id = insertedData[0].id;
+            }
+          }
         }
       } catch (err) {
-        console.warn('Supabase scheduled_test_attempts insert note:', err);
+        console.warn('Supabase scheduled_test_attempts sync note:', err);
       }
     }
 
